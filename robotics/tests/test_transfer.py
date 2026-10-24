@@ -4,6 +4,7 @@ Pure math plus a simulated pour (pour_motor6, ~20 s real time): no arm, no arm_s
 Run from robotics/:   python -m pytest -q tests
 """
 import math
+import time
 import sys
 from pathlib import Path
 
@@ -132,3 +133,42 @@ def test_pour_motor6_runs_on_the_tilt_stream_and_ends_upright(monkeypatch):
     assert r.ok, r.reason
     assert max(tilts) <= 90 - (-5.0)                # never past the wrist limit
     assert tilts[-1] == 0.0                         # back upright
+
+
+def _camera_pour(tmp_path, px, conf=1.0):
+    """A CameraPour without a camera: fake percent calibration (4 mL full, 200 px box) + a stub tracker."""
+    import types
+    from laminar import pour_motor6 as P6
+    from level import LevelSample
+    cp = T.CameraPour.__new__(T.CameraPour)
+    cp.P6, cp.column, cp.empty = P6, "A", []
+    cp.calib = str(P6.fake_calibrate(tmp_path / "calib.json"))
+    cp.tracker = types.SimpleNamespace(read=lambda name: LevelSample(px * 0.02, px, conf, time.time()))
+    cp.asked = []
+
+    def fake_pour(direction, target, max_tilt, view=True):
+        cp.asked.append(target)
+        return types.SimpleNamespace(ok=True, final_ml=(target * 4.0), result="done", reason="target reached")
+    cp.pour = fake_pour
+    return cp
+
+
+def test_add_ml_pours_on_top_of_what_the_channel_holds(tmp_path):
+    cp = _camera_pour(tmp_path, px=50)                  # 25 % of a 4 mL channel = 1 mL already in it
+    assert cp.level() == pytest.approx((0.25, 1.0, 4.0))
+    r, added = cp.pour_ml(+1, 2.0, 85.0, view=False)
+    assert cp.asked == [pytest.approx(0.75)]            # 1 mL + 2 mL = 75 % of full, not 50 % of full
+    assert added == pytest.approx(2.0)
+
+
+def test_add_ml_refuses_to_overfill_without_tilting(tmp_path):
+    cp = _camera_pour(tmp_path, px=150)                 # 3 mL of 4
+    with pytest.raises(RuntimeError, match="overflow"):
+        cp.pour_ml(+1, 2.0, 85.0, view=False)
+    assert cp.asked == []
+
+
+def test_add_ml_refuses_when_the_camera_cannot_read_the_column(tmp_path):
+    cp = _camera_pour(tmp_path, px=0, conf=0.1)
+    with pytest.raises(RuntimeError, match="can't read column"):
+        cp.pour_ml(+1, 1.0, 85.0, view=False)

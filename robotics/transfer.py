@@ -29,6 +29,7 @@ import sys
 import time
 from pathlib import Path as FilePath
 
+import numpy as np
 import yaml
 
 import motion as M
@@ -119,6 +120,37 @@ class CameraPour:
             if win:
                 win.close()
 
+    def level(self, fresh_s: float = 1.0) -> tuple[float, float, float]:
+        """(fraction of full, mL, capacity mL) in the pour column now, from the percent calibration."""
+        calib = json.loads(FilePath(self.calib).read_text())
+        curve = (calib.get("fill_curve") or {}).get(self.column)
+        if not curve or len(curve) < 2 or not calib.get("capacity_ml"):
+            raise RuntimeError("camera calibration has no fill curve / capacity: recalibrate with --percent "
+                               "--capacity-ml <mL in a full channel>")
+        end = time.time() + fresh_s
+        s = self.tracker.read(self.column)
+        while (time.time() - s.ts > 0.5 or s.conf < 0.5) and time.time() < end:
+            time.sleep(0.05)
+            s = self.tracker.read(self.column)
+        if time.time() - s.ts > 0.5 or s.conf < 0.5:
+            raise RuntimeError(f"camera can't read column {self.column} (conf {s.conf:.2f}): vial, arm or hand in "
+                               "view, or too dark")
+        pxs, fracs = zip(*sorted(curve))
+        frac = float(np.clip(np.interp(s.px, pxs, fracs), 0.0, 1.0))
+        cap = float(calib["capacity_ml"])
+        return frac, frac * cap, cap
+
+    def pour_ml(self, direction: int, add_ml: float, max_tilt: float, view: bool = True):
+        """Pour add_ml MORE into the column (whatever it already holds). Returns (PourResult, mL added or None).
+        Refuses, without tilting, if that would overfill the channel."""
+        frac0, ml0, cap = self.level()
+        target = frac0 + add_ml / cap
+        if target > 1.0:
+            raise RuntimeError(f"channel {self.column} holds {ml0:.1f} of {cap:g} mL: +{add_ml:g} mL would overflow")
+        r = self.pour(direction, target, max_tilt, view=view)
+        added = None if r.final_ml is None else round(r.final_ml - ml0, 3)
+        return r, added
+
     def close(self) -> None:
         self.tracker.stop()
         self.cam.stop()
@@ -149,6 +181,8 @@ def main() -> None:
     ap.add_argument("--cam", default="0", help="camera pour: side camera index or path")
     ap.add_argument("--calib", default=str(DEFAULT_CALIB), help="camera pour: camera calibration file")
     ap.add_argument("--target", type=float, default=0.9, help="camera pour: fill target, fraction of full")
+    ap.add_argument("--add-ml", type=float, default=None,
+                    help="camera pour: pour this many mL MORE (whatever the channel holds) instead of --target")
     ap.add_argument("--max-tilt", type=float, default=85.0, help="camera pour: max roll from upright, deg")
     ap.add_argument("--no-view", action="store_true", help="camera pour: no live camera window")
     ap.add_argument("--tilt", type=float, default=80.0, help="fixed pour: roll angle, degrees")
@@ -203,7 +237,11 @@ def main() -> None:
         for p in out:
             client.run(p)
         if camera:
-            r = camera.pour(direction, a.target, a.max_tilt, view=not a.no_view)
+            if a.add_ml is not None:
+                r, added = camera.pour_ml(direction, a.add_ml, a.max_tilt, view=not a.no_view)
+                print(f"added {added} mL (asked {a.add_ml:g})")
+            else:
+                r = camera.pour(direction, a.target, a.max_tilt, view=not a.no_view)
             ok = r.ok
             fill = f"{r.final_fill:.0%} of target" if r.final_fill is not None else "fill unknown"
             print(f"pour {r.result}: {r.reason} ({fill})")
