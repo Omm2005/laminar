@@ -17,6 +17,10 @@ Safety, in code (never left to the language model):
 
 Interpretation: a deterministic parser by default (no API calls). LAMINAR_PLANNER=claude interprets
 free-form requests with Claude instead (needs ANTHROPIC_API_KEY); the same validation applies.
+
+Entry agent: with a `remote` (the planner + orchestrator agent, see agent_protocol.py) the bench view, the
+plan and the run come from that agent; this one keeps the conversation, the safety checks and the approvals.
+If the planner agent does not answer, the built-in planner and executor take over and the reply says so.
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable
+from typing import Protocol
 from dataclasses import asdict, dataclass, field
 
 from . import telemetry
@@ -49,6 +54,16 @@ class Intent:
     target: str | None = None
     plan_id: str | None = None
     note: str = ""                    # why the request is unclear, in words for the user
+
+
+class Remote(Protocol):
+    """The planner + orchestrator behind this entry agent. Each call raises on timeout / unreachable."""
+
+    def bench(self) -> dict: ...
+
+    def plan(self, text: str, view: dict, requester: str) -> tuple[dict | None, str]: ...
+
+    def run(self, plan: dict, approved_by: str) -> dict: ...
 
 
 @dataclass
@@ -275,7 +290,8 @@ HELP = ("I'm Laminar, a lab robot that pours measured volumes from vials into a 
 
 class LabAgent:
     def __init__(self, system: System | None = None, approvers: set[str] | None = None,
-                 interpret: Callable[[str, dict], Intent] | None = None, executor_factory=None):
+                 interpret: Callable[[str, dict], Intent] | None = None, executor_factory=None,
+                 remote: Remote | None = None):
         from .executor import Executor
         self.system = system or make_system(time_scale=0)
         self.simulated = type(self.system.skills).__name__.startswith("Fake")  # nothing physical moves
@@ -289,12 +305,33 @@ class LabAgent:
             self.system, validator=lambda plan, bench: validate_plan(plan, bench_view(self.system))))
         self.plans: dict[str, Pending] = {}
         self._lock = threading.Lock()   # one run at a time: there is one arm
+        self.remote = remote            # planner + orchestrator agent; None = built-in only
+
+    def _remote_call(self, what: str, fn):
+        """Call the planner agent; None (and a log line) if it is offline, so the built-in path takes over."""
+        if self.remote is None:
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            telemetry.log("agent.remote_error", {"call": what, "error": repr(e)})
+            return None
+
+    def view(self) -> tuple[dict, str]:
+        """Bench view from the planner agent if it answers, else from this agent's own system."""
+        v = self._remote_call("bench", lambda: self.remote.bench())
+        return (v, "") if v else (bench_view(self.system), "" if self.remote is None else self.OFFLINE)
+
+    OFFLINE = "\n(planner agent offline: answered by Laminar's built-in planner)"
 
     def can_approve(self, sender: str) -> bool:
         return sender in self.approvers or (self.simulated and not self.approvers)
 
     def handle(self, sender: str, text: str) -> str:
-        view = bench_view(self.system)
+        view, note = self.view()
+        return self._handle(sender, text, view) + note
+
+    def _handle(self, sender: str, text: str, view: dict) -> str:
         try:
             intent = self.interpret(text, view)
         except Exception as e:  # interpreter down (network, quota): fall back to the rule parser
@@ -306,7 +343,7 @@ class LabAgent:
             return HELP
         if intent.action == "bench":
             return describe_bench(view)
-        if intent.action == "unclear":
+        if intent.action == "unclear" and self.remote is None:
             return intent.note or HELP
         if intent.action == "runs":
             done = [p for p in self.plans.values() if p.report]
@@ -324,7 +361,13 @@ class LabAgent:
         return self.propose(sender, text, intent, view)
 
     def propose(self, sender: str, text: str, intent: Intent, view: dict) -> str:
-        plan, why = build_plan(intent, view, text)
+        remote = self._remote_call("plan", lambda: self.remote.plan(text, view, sender))
+        if remote is not None:
+            plan, why = remote               # the planner agent reads free-form requests itself
+        elif intent.action == "unclear":
+            return intent.note or HELP
+        else:
+            plan, why = build_plan(intent, view, text)
         if plan is None:
             return f"I can't plan that: {why}."
         problems = validate_plan(plan, view)
@@ -351,9 +394,12 @@ class LabAgent:
             return "The arm is busy with another run; approve again when it finishes."
         try:
             p.status = "running"
-            report: RunReport = self.executor_factory().run(p.plan, approved_by=sender)
-            p.report = report.to_dict()
-            p.status = report.status
+            rep = self._remote_call("run", lambda: self.remote.run(p.plan, sender))
+            if rep is None:
+                report: RunReport = self.executor_factory().run(p.plan, approved_by=sender)
+                rep = report.to_dict()
+            p.report = rep
+            p.status = rep["status"]
         finally:
             self._lock.release()
         return describe_report(p.report)

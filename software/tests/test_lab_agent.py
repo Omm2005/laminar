@@ -98,3 +98,57 @@ def test_fetch_agent_builds(monkeypatch):
     agent = fetch_agent.make_agent(LabAgent(make_system(fake=True, time_scale=0), approvers=set(),
                                             interpret=parse_request))
     assert agent.address.startswith("agent1q")
+
+
+class FakeRemote:
+    """Stands in for the planner + orchestrator agent."""
+
+    def __init__(self, system, fail=False):
+        from laminar.planner_agent import Orchestrator
+        self.orch, self.fail, self.calls = Orchestrator(system), fail, []
+
+    def _check(self, what):
+        self.calls.append(what)
+        if self.fail:
+            raise TimeoutError("planner agent offline")
+
+    def bench(self):
+        self._check("bench")
+        return self.orch.bench()
+
+    def plan(self, text, view, requester):
+        self._check("plan")
+        return self.orch.plan_for(text)
+
+    def run(self, plan, approved_by):
+        self._check("run")
+        return self.orch.run(plan, approved_by)
+
+
+def test_entry_agent_forwards_to_the_planner_agent():
+    pytest.importorskip("uagents")
+    remote = FakeRemote(make_system(fake=True, time_scale=0))
+    lab = LabAgent(make_system(fake=True, time_scale=0), approvers={ME}, interpret=parse_request, remote=remote)
+    pid = _plan_id(lab.handle(ME, "pour 2 mL of blue into tube1"))
+    assert "DONE" in lab.handle(ME, f"approve {pid}")
+    assert remote.calls == ["bench", "plan", "bench", "run"]
+    assert "offline" not in lab.handle(ME, "runs")
+
+
+def test_entry_agent_still_checks_and_gates_remote_plans():
+    pytest.importorskip("uagents")
+    remote = FakeRemote(make_system(fake=True, time_scale=0))
+    remote.orch.plan_for = lambda text: ({"plan_id": "abc123", "request": text, "steps": [
+        {"skill": "pour", "args": {"target": "tube1", "ml": 2.0, "liquid": "blue"}}]}, "")
+    lab = LabAgent(make_system(fake=True, time_scale=0), approvers={ME}, interpret=parse_request, remote=remote)
+    r = lab.handle(ME, "pour 2 mL of blue")
+    assert "fails the safety checks" in r and "nothing in the gripper" in r and "run" not in remote.calls
+
+
+def test_entry_agent_falls_back_when_the_planner_is_offline():
+    pytest.importorskip("uagents")
+    remote = FakeRemote(make_system(fake=True, time_scale=0), fail=True)
+    lab = LabAgent(make_system(fake=True, time_scale=0), approvers={ME}, interpret=parse_request, remote=remote)
+    r = lab.handle(ME, "pour 1 mL of red")
+    assert "Plan " in r and "planner agent offline" in r
+    assert "DONE" in lab.handle(ME, f"approve {_plan_id(r)}")

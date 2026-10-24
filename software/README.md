@@ -108,6 +108,8 @@ Mac + PCAN: `--channel can0@1000000` (default). Ubuntu: `--channel can0`. Confir
 | `laminar/fetch_agent.py` | uAgent `laminar-lab`: Agent Chat Protocol, Agentverse mailbox, so it is usable from ASI:One |
 | `laminar/tiger.py` | Tiger Data: hypertables, continuous aggregates, compression, background writer, arm tracking sampler |
 | `AGENT.md` | The agent's Agentverse profile |
+| `laminar/agent_protocol.py` | LaminarPlanner protocol: `BenchQuery/BenchView`, `PlanRequest/PlanProposal`, `RunRequest/RunReport` |
+| `laminar/planner_agent.py` | Reference planner + orchestrator agent behind the entry agent (Om's Claude planner replaces `plan_for`) |
 
 The whole workflow runs in an ASI:One chat: `what's on the bench?` -> `pour 2 mL of blue into tube1` (plan,
 checked against the bench) -> `approve <id>` -> step-by-step report with the measured volume. Anyone can
@@ -122,9 +124,16 @@ export LAMINAR_APPROVERS="<your ASI:One address>"
 python -m laminar.fetch_agent                         # prints the address + inspector link: Connect -> Mailbox
 ```
 
-| Agent | Address |
-| --- | --- |
-| `laminar-lab` | _fill in after the first run_ |
+Two agents: `laminar-lab` is the public entry agent (Agentverse listing, Chat Protocol, approvals and the
+code-side plan checks). It forwards bench queries, plan requests and approved runs to the planner +
+orchestrator agent over the LaminarPlanner protocol, and falls back to its built-in planner if that agent
+does not answer. Set `LAMINAR_PLANNER_AGENT=<planner address>` for the entry agent, and run
+`python -m laminar.planner_agent` (needs `LAMINAR_PLANNER_SEED`).
+
+| Agent | Role | Address |
+| --- | --- | --- |
+| `laminar-lab` | Entry agent on Agentverse / ASI:One | `agent1qduarv4s64wtl069d26ydak0q8k8em94rvag344czm4xp9pzr3ht56dp2s8` |
+| `laminar-planner` | Planner + orchestrator (reference) | `agent1qvensewvksgpfdvqd7ymj59u7hjzq0g0q739uw2w026h4wxx49d2wff4ysl` |
 
 Tiger Data (TimescaleDB): every `telemetry.log()` event, every pour sample and the arm's per-joint
 tracking error, as hypertables with real-time continuous aggregates (`pour_1s`, `arm_tracking_1s`), a
