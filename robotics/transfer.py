@@ -106,15 +106,22 @@ class CameraPour:
         self.tracker.start()
         self.empty = json.loads(FilePath(self.calib).read_text()).get("empty", [])
 
-    def pour(self, direction: int, target: float, max_tilt: float, view: bool = True):
+    def pour(self, direction: int, target: float, max_tilt: float, view: bool = True, on_tick=None):
         """pour_right / pour_left through arm_server's tilt_stream. Returns pour_motor6.PourResult."""
         P6 = self.P6
         joint = P6.ServerTiltJoint(6)
         win = P6.PourView(self.cam, self.tracker, self.column, self.empty) if view else None
         fn = P6.pour_right if direction > 0 else P6.pour_left
+
+        def tick(rec):
+            if win:
+                win(rec)
+            if on_tick:
+                on_tick(rec)
         try:
             return fn(joint, self.tracker, self.column, calib_path=self.calib,
-                      cfg=P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt), on_tick=win)
+                      cfg=P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt), on_tick=tick)
+
         finally:
             joint.close()       # ends the tilt_stream: arm_server rolls back to the base angle
             if win:
