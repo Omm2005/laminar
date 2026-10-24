@@ -1,70 +1,204 @@
 /**
- * Live 3D view of the B601-RS. Primitives-only (boxes + cylinders) rendered off the URDF
- * joint origins we exported in chain.json, driven by robot.latestTelemetry.
+ * Isaac-Sim-ish view of the real B601-RS. Scene follows public/robot/viewer.html as the baseline
+ * (dark background, hemisphere + key light, shadow disc, 70%-of-view framing) and layers on:
+ *   - ACES filmic tone mapping, exposure 1.1
+ *   - drei Environment "city" at low intensity for reflections
+ *   - GridHelper floor (two greys), scene fog so the grid fades
+ *   - PBR tweaks: aluminium metal/rough, lime+black plastic matte, slight clearcoat on lime
+ *   - @react-three/postprocessing SSAO + bloom (lime-only via luminance threshold), auto-off
+ *     when running fps drops below 45
+ *   - translucent cylinder at the vision target
+ *   - thin trail of the gripper tip over the last ~2 s
  *
- * To keep motion smooth at 60 fps while telemetry arrives at 10 Hz we hold a ring buffer of
- * the last ~20 samples and read the joint vector 150 ms behind the newest sample time, linearly
- * interpolating between the two straddling samples. The whole r3f subtree is memoised so a new
- * telemetry row doesn't rerender the rest of the Live page.
+ * Joints: ring buffer of the last 20 telemetry samples; render 150 ms behind newest for smooth
+ * 60 fps motion. The whole Canvas subtree is memoised so a new telemetry row doesn't rerender
+ * the rest of the Live/ROBOT page.
  */
-import { Suspense, memo, useEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, ContactShadows } from "@react-three/drei";
+import { Suspense, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
+import { Bloom, EffectComposer, SSAO } from "@react-three/postprocessing";
 import * as THREE from "three";
-import chainData from "./chain.json";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-type Segment = {
-  name: string;
-  type: "revolute" | "fixed";
-  xyz: [number, number, number];
-  R: number[]; // row-major 3x3
-  axis: [number, number, number] | null;
-};
-const CHAIN = chainData as Segment[];
-
-const STATUS_COLOR: Record<string, string> = {
-  idle:              "#8792a3",
-  queued:            "#8792a3",
-  planning:          "#8792a3",
-  awaiting_approval: "#e8c257",
-  approved:          "#7dd3fc",
-  running:           "#7dd3fc",
-  pouring:           "#4a9aff",
-  done:              "#68d391",
-  failed:            "#ff5e5e",
-  stalled:           "#ff5e5e",
-  estop:             "#ff5e5e",
-};
+const BASE_URL = "/robot/";
+const INTERP_LAG_MS = 150;
+const TRAIL_WINDOW_S = 2.0;
+const TRAIL_HZ = 60;
+const TRAIL_MAX = TRAIL_WINDOW_S * TRAIL_HZ;
 
 export type Telem = { t: number; joints: number[]; commanded?: number[] | null };
 
-type ArmProps = {
-  samples: Telem[];       // ring buffer, oldest -> newest
-  status: string;
-  gripperDeg?: number;
-  pourChannel?: number | null;
-  cameraPreset?: "front" | "top" | "shoulder";
+type JointSpec = {
+  name: string; type: "revolute" | "prismatic" | "fixed";
+  parent: string; child: string;
+  xyz: [number, number, number]; rpy: [number, number, number]; axis: [number, number, number];
+  limit: [number, number] | null;
+};
+type RobotSpec = { links: Record<string, { glb: string }>; joints: JointSpec[] };
+
+type MaterialClass = "lime" | "aluminium" | "plastic_black" | "other";
+
+type RobotHandle = {
+  root: THREE.Group;
+  tipTracker: THREE.Group;
+  setFromTelemetry: (deg6: number[], gripperDeg?: number) => void;
+  dispose: () => void;
+  limeMaterials: THREE.MeshPhysicalMaterial[];
 };
 
-const PRESETS: Record<string, [number, number, number]> = {
-  front:    [-0.55, 0.42, 0.55],
-  top:      [ 0.00, 0.80, 0.05],
-  shoulder: [-0.35, 0.55, -0.35],
-};
+/* ----------------------------------------------------------- status + colours */
 
-/** Interpolate joints 150 ms behind the newest sample. Returns [6]. */
-function interpolate(samples: Telem[], latencyMs = 150): number[] {
+const STATUS_TINT: Record<string, string> = {
+  idle: "#6c7585",
+  queued: "#6c7585",
+  planning: "#6c7585",
+  awaiting_approval: "#e8c257",
+  approved: "#7dd3fc",
+  running: "#7dd3fc",
+  pouring: "#4a9aff",
+  done: "#68d391",
+  failed: "#ff5e5e",
+  stalled: "#ff5e5e",
+  estop: "#ff5e5e",
+};
+const STATUS_TRAIL: Record<string, string> = {
+  idle: "#6c7585",
+  running: "#7dd3fc",
+  pouring: "#4a9aff",
+  estop: "#ff5e5e",
+};
+const _hsl = { h: 0, s: 0, l: 0 };
+function classify(c: THREE.Color): MaterialClass {
+  c.getHSL(_hsl);
+  if (_hsl.h >= 50 / 360 && _hsl.h <= 85 / 360 && _hsl.s > 0.3 && _hsl.l > 0.25 && _hsl.l < 0.7) return "lime";
+  if (_hsl.l < 0.08) return "plastic_black";
+  if (_hsl.s < 0.1 && _hsl.l > 0.25) return "aluminium";
+  return "other";
+}
+
+/* --------------------------------------------------------------- loadRobot (ported from viewer) */
+
+async function loadRobot(base: string): Promise<RobotHandle> {
+  const spec: RobotSpec = await (await fetch(base + "robot.json")).json();
+  const loader = new GLTFLoader();
+  const links: Record<string, THREE.Group> = {};
+  for (const name of Object.keys(spec.links)) links[name] = new THREE.Group();
+  for (const j of spec.joints) {
+    if (!links[j.child]) links[j.child] = new THREE.Group();
+    if (!links[j.parent]) links[j.parent] = new THREE.Group();
+  }
+  const joints: Record<string, { group: THREE.Group; axis: THREE.Vector3 | null; type: string; limit: [number, number] | null }> = {};
+  for (const j of spec.joints) {
+    const jointFrame = new THREE.Group();
+    jointFrame.position.set(...j.xyz);
+    jointFrame.rotation.set(j.rpy[0], j.rpy[1], j.rpy[2], "ZYX");
+    const moving = new THREE.Group();
+    jointFrame.add(moving);
+    moving.add(links[j.child]);
+    links[j.parent].add(jointFrame);
+    joints[j.name] = { group: moving, axis: j.axis ? new THREE.Vector3(...j.axis) : null, type: j.type, limit: j.limit };
+  }
+  const root = new THREE.Group();
+  root.add(links["base_link"]);
+  root.rotation.x = -Math.PI / 2;
+
+  const limeMaterials: THREE.MeshPhysicalMaterial[] = [];
+  await Promise.all(
+    Object.entries(spec.links).map(([name, info]) =>
+      new Promise<void>((resolve) => {
+        loader.load(
+          base + info.glb,
+          (g) => {
+            g.scene.traverse((o) => {
+              const mesh = o as THREE.Mesh;
+              if (!mesh.isMesh) return;
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+              const upgraded: THREE.MeshPhysicalMaterial[] = [];
+              for (const m of mats) {
+                const sm = m as THREE.MeshStandardMaterial;
+                const upgrade = new THREE.MeshPhysicalMaterial();
+                // copy what we care about (keep vertex colours, basic maps)
+                upgrade.vertexColors = !!sm.vertexColors;
+                upgrade.color = sm.color ? sm.color.clone() : new THREE.Color(0xffffff);
+                upgrade.map = sm.map ?? null;
+                upgrade.normalMap = sm.normalMap ?? null;
+                upgrade.name = sm.name;
+
+                const cls = sm.color ? classify(sm.color) : "other";
+                if (cls === "lime") {
+                  upgrade.metalness = 0.0;
+                  upgrade.roughness = 0.55;
+                  upgrade.clearcoat = 0.6;
+                  upgrade.clearcoatRoughness = 0.25;
+                  (upgrade as unknown as { _origColor: THREE.Color })._origColor = upgrade.color.clone();
+                  limeMaterials.push(upgrade);
+                } else if (cls === "aluminium") {
+                  upgrade.metalness = 0.6;
+                  upgrade.roughness = 0.35;
+                } else if (cls === "plastic_black") {
+                  upgrade.metalness = 0.0;
+                  upgrade.roughness = 0.55;
+                } else {
+                  upgrade.metalness = 0.15;
+                  upgrade.roughness = 0.6;
+                }
+                upgraded.push(upgrade);
+                sm.dispose?.();
+              }
+              mesh.material = upgraded.length === 1 ? upgraded[0] : upgraded;
+            });
+            links[name].add(g.scene);
+            resolve();
+          },
+          undefined,
+          (e) => { console.error("mesh", name, e); resolve(); },
+        );
+      }),
+    ),
+  );
+
+  const tipTracker = links["gripper_end"] ?? new THREE.Group();
+
+  function setJoint(name: string, value: number) {
+    const j = joints[name];
+    if (!j || !j.axis) return;
+    const v = j.limit ? Math.min(j.limit[1], Math.max(j.limit[0], value)) : value;
+    if (j.type === "prismatic") j.group.position.copy(j.axis).multiplyScalar(v);
+    else j.group.quaternion.setFromAxisAngle(j.axis, v);
+  }
+  function setFromTelemetry(deg6: number[], gripperDeg?: number) {
+    for (let i = 0; i < 6; i++) setJoint("joint" + (i + 1), THREE.MathUtils.degToRad(deg6[i] ?? 0));
+    if (gripperDeg != null) {
+      const m = Math.max(0, Math.min(0.05, (gripperDeg / 100) * 0.05));
+      setJoint("gripper_joint1", m);
+      setJoint("gripper_joint2", m);
+    }
+  }
+  function dispose() {
+    root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.geometry?.dispose();
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const m of mats) m?.dispose?.();
+      }
+    });
+  }
+  return { root, tipTracker, setFromTelemetry, dispose, limeMaterials };
+}
+
+/* ------------------------------------------------------------- interpolation */
+
+function interpAt(samples: Telem[], t: number): number[] {
   if (samples.length === 0) return [0, 0, 0, 0, 0, 0];
   if (samples.length === 1) return samples[0].joints.slice(0, 6);
-  const now = Date.now();
-  const t = now - latencyMs;
   const last = samples[samples.length - 1];
-  // if we're ahead of the newest sample, clamp to newest
   if (t >= last.t) return last.joints.slice(0, 6);
-  // find the pair that straddles t
   for (let i = samples.length - 1; i > 0; i--) {
-    const b = samples[i];
-    const a = samples[i - 1];
+    const b = samples[i], a = samples[i - 1];
     if (a.t <= t && t <= b.t) {
       const f = b.t === a.t ? 1 : (t - a.t) / (b.t - a.t);
       return Array.from({ length: 6 }, (_, k) =>
@@ -75,242 +209,224 @@ function interpolate(samples: Telem[], latencyMs = 150): number[] {
   return samples[0].joints.slice(0, 6);
 }
 
-function Joint({
-  seg, children, jointAngleRad,
-}: { seg: Segment; children: React.ReactNode; jointAngleRad: number }) {
-  // Compose origin: translate then rotate by URDF R, then (if revolute) by the joint angle on its axis.
-  const originMatrix = useMemo(() => {
-    const m = new THREE.Matrix4();
-    m.makeTranslation(seg.xyz[0], seg.xyz[1], seg.xyz[2]);
-    const r = new THREE.Matrix4();
-    const R = seg.R;
-    r.set(
-      R[0], R[1], R[2], 0,
-      R[3], R[4], R[5], 0,
-      R[6], R[7], R[8], 0,
-      0, 0, 0, 1,
-    );
-    m.multiply(r);
-    return m;
-  }, [seg]);
+/* -------------------------------------------------------------- scene parts */
 
-  const axisRef = useRef<THREE.Group>(null!);
-  useFrame(() => {
-    if (!axisRef.current || seg.type !== "revolute" || !seg.axis) return;
-    const q = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(...seg.axis).normalize(),
-      jointAngleRad,
-    );
-    axisRef.current.quaternion.copy(q);
-  });
-
-  return (
-    <group matrix={originMatrix} matrixAutoUpdate={false}>
-      <group ref={axisRef}>
-        {children}
-      </group>
-    </group>
-  );
-}
-
-function Link({ color, length = 0.08, thickness = 0.03 }: { color: string; length?: number; thickness?: number }) {
-  return (
-    <mesh castShadow receiveShadow position={[0, 0, length / 2]}>
-      <boxGeometry args={[thickness, thickness, length]} />
-      <meshStandardMaterial color={color} roughness={0.4} metalness={0.3} />
-    </mesh>
-  );
-}
-
-function Gripper({ openDeg, color }: { openDeg: number; color: string }) {
-  // 0 = closed, 270 = fully open; map to jaw spread 0..0.04 m
-  const spread = Math.min(1, Math.max(0, openDeg / 270)) * 0.04;
-  return (
-    <group>
-      <mesh castShadow position={[0, spread, 0.015]}>
-        <boxGeometry args={[0.02, 0.006, 0.03]} />
-        <meshStandardMaterial color={color} roughness={0.3} metalness={0.5} />
-      </mesh>
-      <mesh castShadow position={[0, -spread, 0.015]}>
-        <boxGeometry args={[0.02, 0.006, 0.03]} />
-        <meshStandardMaterial color={color} roughness={0.3} metalness={0.5} />
-      </mesh>
-    </group>
-  );
-}
-
-function ArmChain({ samplesRef, gripperDeg, color }: {
-  samplesRef: React.MutableRefObject<Telem[]>;
-  gripperDeg: number;
-  color: string;
-}) {
-  // live joint angles, updated per-frame
-  const anglesRef = useRef<number[]>([0, 0, 0, 0, 0, 0]);
-  useFrame(() => {
-    anglesRef.current = interpolate(samplesRef.current).map((d) => (d * Math.PI) / 180);
-  });
-
-  // Build the nested structure recursively from the chain. Each revolute joint reads from anglesRef[i].
-  // Fixed segments are just a transform.
-  let revoluteIdx = 0;
-  type Node = (children: React.ReactNode) => React.ReactNode;
-  const nodes: Node[] = CHAIN.map((seg) => {
-    if (seg.type === "revolute") {
-      const idx = revoluteIdx++;
-      return (children) => (
-        <JointLive key={seg.name} seg={seg} angleIdx={idx} anglesRef={anglesRef} color={color}>
-          {children}
-        </JointLive>
-      );
-    }
-    return (children) => (
-      <Joint key={seg.name} seg={seg} jointAngleRad={0}>
-        {/* fixed segment: a short link stub */}
-        <Link color={color} length={0.04} thickness={0.025} />
-        {children}
-      </Joint>
-    );
-  });
-  // Compose: nodes[0]( nodes[1]( ... <Gripper /> ... ) )
-  let tree: React.ReactNode = <Gripper openDeg={gripperDeg} color={color} />;
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    tree = nodes[i](tree);
-  }
-  return (
-    <group position={[0, 0, 0]}>
-      {/* base plinth */}
-      <mesh receiveShadow position={[0, 0, 0.015]}>
-        <cylinderGeometry args={[0.06, 0.07, 0.03, 24]} />
-        <meshStandardMaterial color="#2b303b" roughness={0.7} />
-      </mesh>
-      {tree}
-    </group>
-  );
-}
-
-/** Revolute-joint wrapper that reads its angle from a ref so useFrame updates don't re-render React. */
-function JointLive({
-  seg, angleIdx, anglesRef, children, color,
-}: {
-  seg: Segment; angleIdx: number;
-  anglesRef: React.MutableRefObject<number[]>;
-  children: React.ReactNode; color: string;
-}) {
-  const originMatrix = useMemo(() => {
-    const m = new THREE.Matrix4();
-    m.makeTranslation(seg.xyz[0], seg.xyz[1], seg.xyz[2]);
-    const r = new THREE.Matrix4();
-    const R = seg.R;
-    r.set(
-      R[0], R[1], R[2], 0,
-      R[3], R[4], R[5], 0,
-      R[6], R[7], R[8], 0,
-      0, 0, 0, 1,
-    );
-    m.multiply(r);
-    return m;
-  }, [seg]);
-  const axisRef = useRef<THREE.Group>(null!);
-  useFrame(() => {
-    if (!axisRef.current || !seg.axis) return;
-    const q = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(...seg.axis).normalize(),
-      anglesRef.current[angleIdx] ?? 0,
-    );
-    axisRef.current.quaternion.copy(q);
-  });
-  return (
-    <group matrix={originMatrix} matrixAutoUpdate={false}>
-      <group ref={axisRef}>
-        <Link color={color} length={0.07} thickness={0.028} />
-        {children}
-      </group>
-    </group>
-  );
-}
-
-function PourChannelMarker({ channel }: { channel: number | null | undefined }) {
-  if (channel == null) return null;
-  // reservoir sits ~0.25 m in front of the base; 12 channels along +y at 15 mm pitch
-  const y = (channel - 6.5) * 0.015;
-  return (
-    <mesh position={[0.25, y, 0.01]}>
-      <boxGeometry args={[0.03, 0.013, 0.02]} />
-      <meshStandardMaterial color="#4a9aff" emissive="#4a9aff" emissiveIntensity={0.6} />
-    </mesh>
-  );
-}
-
-const Scene = memo(function Scene({
-  samplesRef, status, gripperDeg = 0, pourChannel = null, cameraPreset = "front",
-}: {
-  samplesRef: React.MutableRefObject<Telem[]>;
-  status: string; gripperDeg?: number; pourChannel?: number | null;
+type ArmProps = {
+  samples: Telem[];
+  status: string;
+  gripperDeg?: number;
+  pourChannel?: number | null;
   cameraPreset?: "front" | "top" | "shoulder";
-}) {
-  const color = STATUS_COLOR[status] ?? STATUS_COLOR.idle;
-  const cam = PRESETS[cameraPreset] ?? PRESETS.front;
-  return (
-    <>
-      <color attach="background" args={["#0b0d12"]} />
-      <ambientLight intensity={0.4} />
-      <directionalLight
-        position={[-2, 3, 2]}
-        intensity={1.1}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-      />
-      <group rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]}>
-        {/* URDF has z-up; r3f has y-up — rotate the whole arm so z becomes y. */}
-        <ArmChain samplesRef={samplesRef} gripperDeg={gripperDeg} color={color} />
-        <PourChannelMarker channel={pourChannel} />
-      </group>
-      <ContactShadows position={[0, -0.051, 0]} opacity={0.35} scale={1.2} blur={2.2} far={0.5} />
-      <OrbitControls makeDefault target={[0, 0.15, 0]} enablePan={false} />
-      <SyncCamera position={cam} target={[0, 0.15, 0]} />
-    </>
-  );
-});
+};
 
-function SyncCamera({ position, target }: { position: [number, number, number]; target: [number, number, number] }) {
-  // When cameraPreset changes, move camera and OrbitControls target to match once (user can still orbit from there).
-  const applied = useRef<string>("");
-  const key = `${position.join(",")};${target.join(",")}`;
+const PRESETS: Record<string, { pos: [number, number, number]; target: [number, number, number] }> = {
+  front:    { pos: [0.65, 0.42, 0.65],  target: [0, 0.25, 0] }, // 3/4 front, slightly above base
+  top:      { pos: [0.001, 1.1, 0.001], target: [0, 0.25, 0] },
+  shoulder: { pos: [-0.6, 0.6, -0.4],   target: [0, 0.25, 0] },
+};
+
+function ToneMappingSetup() {
+  const { gl } = useThree();
+  useEffect(() => {
+    gl.toneMapping = THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = 1.1;
+    gl.shadowMap.enabled = true;
+    gl.shadowMap.type = THREE.PCFSoftShadowMap;
+  }, [gl]);
+  return null;
+}
+
+function SyncCamera({ preset }: { preset: "front" | "top" | "shoulder" }) {
+  const applied = useRef("");
   useFrame(({ camera, controls }) => {
-    if (applied.current === key) return;
-    camera.position.set(...position);
+    if (applied.current === preset) return;
+    const { pos, target } = PRESETS[preset];
+    camera.position.set(...pos);
     camera.lookAt(...target);
-    // @ts-expect-error drei OrbitControls expose `target`
-    if (controls?.target) controls.target.set(...target);
+    // @ts-expect-error drei OrbitControls expose `target` / `update`
+    controls?.target?.set?.(...target);
     // @ts-expect-error drei OrbitControls expose `update`
     controls?.update?.();
-    applied.current = key;
+    applied.current = preset;
   });
   return null;
 }
 
+function GripperTrail({ tipRef, status }: { tipRef: React.MutableRefObject<THREE.Object3D | null>; status: string }) {
+  const geomRef = useRef<THREE.BufferGeometry>(null!);
+  const posAttr = useMemo(() => {
+    const arr = new Float32Array(TRAIL_MAX * 3);
+    const attr = new THREE.BufferAttribute(arr, 3);
+    attr.setUsage(THREE.DynamicDrawUsage);
+    return attr;
+  }, []);
+  const bufIdx = useRef(0);
+  const bufLen = useRef(0);
+  useFrame(() => {
+    if (!tipRef.current) return;
+    const p = new THREE.Vector3();
+    tipRef.current.getWorldPosition(p);
+    const arr = posAttr.array as Float32Array;
+    arr[bufIdx.current * 3 + 0] = p.x;
+    arr[bufIdx.current * 3 + 1] = p.y;
+    arr[bufIdx.current * 3 + 2] = p.z;
+    bufIdx.current = (bufIdx.current + 1) % TRAIL_MAX;
+    bufLen.current = Math.min(bufLen.current + 1, TRAIL_MAX);
+    posAttr.needsUpdate = true;
+    if (geomRef.current) {
+      geomRef.current.setDrawRange(0, bufLen.current);
+    }
+  });
+  const trailColor = STATUS_TRAIL[status] ?? STATUS_TRAIL.idle;
+  return (
+    <line>
+      <bufferGeometry ref={geomRef}>
+        <primitive object={posAttr} attach="attributes-position" />
+      </bufferGeometry>
+      <lineBasicMaterial color={trailColor} transparent opacity={0.65} />
+    </line>
+  );
+}
+
+function VisionTarget({ pourChannel }: { pourChannel: number | null | undefined }) {
+  if (pourChannel == null) return null;
+  // Place the reservoir ~250 mm in front of the base; 12 channels along +y at 15 mm pitch.
+  const y = (pourChannel - 6.5) * 0.015;
+  return (
+    <mesh position={[0.25, 0.015, y]}>
+      <cylinderGeometry args={[0.012, 0.012, 0.04, 24]} />
+      <meshStandardMaterial color="#4a9aff" transparent opacity={0.45} emissive="#4a9aff" emissiveIntensity={0.4} />
+    </mesh>
+  );
+}
+
+function FpsMonitor({ onFps }: { onFps: (fps: number) => void }) {
+  const frames = useRef(0);
+  const t0 = useRef(0);
+  useFrame((state) => {
+    if (t0.current === 0) t0.current = state.clock.elapsedTime;
+    frames.current++;
+    const dt = state.clock.elapsedTime - t0.current;
+    if (dt >= 1.0) {
+      onFps(frames.current / dt);
+      frames.current = 0;
+      t0.current = state.clock.elapsedTime;
+    }
+  });
+  return null;
+}
+
+function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset, onFps }: {
+  samplesRef: React.MutableRefObject<Telem[]>;
+  status: string;
+  gripperDeg: number;
+  pourChannel: number | null | undefined;
+  cameraPreset: "front" | "top" | "shoulder";
+  onFps: (fps: number) => void;
+}) {
+  const [robot, setRobot] = useState<RobotHandle | null>(null);
+  const tipRef = useRef<THREE.Object3D | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadRobot(BASE_URL)
+      .then((h) => { if (cancelled) h.dispose(); else { tipRef.current = h.tipTracker; setRobot(h); } })
+      .catch((e) => console.error("loadRobot", e));
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => () => { robot?.dispose(); }, [robot]);
+
+  useEffect(() => {
+    if (!robot) return;
+    const tint = new THREE.Color(STATUS_TINT[status] ?? STATUS_TINT.idle);
+    const strength = status === "idle" || status === "queued" || status === "planning" ? 0.3 : 0.65;
+    for (const m of robot.limeMaterials) {
+      const orig = (m as unknown as { _origColor?: THREE.Color })._origColor ?? m.color;
+      m.color.copy(orig).lerp(tint, strength);
+      m.emissive = new THREE.Color(tint).multiplyScalar(status === "pouring" || status === "running" ? 0.15 : 0.0);
+    }
+  }, [status, robot]);
+
+  useFrame(() => {
+    if (!robot) return;
+    const deg = interpAt(samplesRef.current, Date.now() - INTERP_LAG_MS);
+    robot.setFromTelemetry(deg, gripperDeg);
+  });
+
+  return (
+    <>
+      <color attach="background" args={["#0b1016"]} />
+      <fog attach="fog" args={["#0b1016", 1.4, 3.0]} />
+      <hemisphereLight args={[0xdfe8ff, 0x202834, 0.55]} />
+      <directionalLight
+        castShadow
+        position={[1.2, 2.0, 0.9]}
+        intensity={1.3}
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-left={-1}
+        shadow-camera-right={1}
+        shadow-camera-top={1}
+        shadow-camera-bottom={-1}
+        shadow-bias={-0.0002}
+      />
+      <Environment preset="city" background={false} environmentIntensity={0.35} />
+      <gridHelper args={[2.4, 24, "#263040", "#171d27"]} position={[0, 0.001, 0]} />
+      <ContactShadows position={[0, 0, 0]} opacity={0.5} scale={1.8} blur={2.8} far={0.9} />
+      <VisionTarget pourChannel={pourChannel} />
+      {robot && <primitive object={robot.root} />}
+      {robot && <GripperTrail tipRef={tipRef} status={status} />}
+      <OrbitControls makeDefault target={PRESETS[cameraPreset].target} enablePan={false} />
+      <SyncCamera preset={cameraPreset} />
+      <FpsMonitor onFps={onFps} />
+    </>
+  );
+}
+
+/* ----------------------------------------------------------- top-level Canvas */
+
 const Arm3D = memo(function Arm3D(props: ArmProps) {
   const samplesRef = useRef<Telem[]>([]);
-  useEffect(() => {
-    samplesRef.current = props.samples;
-  }, [props.samples]);
-  const pixelRatio: [number, number] = [1, 2];
+  useEffect(() => { samplesRef.current = props.samples; }, [props.samples]);
+  const [fps, setFps] = useState(60);
+  const highQuality = fps >= 45;
   return (
     <Canvas
-      shadows
-      dpr={pixelRatio}
-      camera={{ position: PRESETS[props.cameraPreset ?? "front"], fov: 40, near: 0.01, far: 10 }}
-      gl={{ antialias: true }}
+      shadows="soft"
+      dpr={[1, 2]}
+      camera={{ position: PRESETS[props.cameraPreset ?? "front"].pos, fov: 38, near: 0.01, far: 10 }}
+      gl={{ antialias: true, powerPreference: "high-performance" }}
     >
+      <ToneMappingSetup />
       <Suspense fallback={null}>
-        <Scene
+        <RobotScene
           samplesRef={samplesRef}
           status={props.status}
-          gripperDeg={props.gripperDeg}
-          pourChannel={props.pourChannel}
-          cameraPreset={props.cameraPreset}
+          gripperDeg={props.gripperDeg ?? 0}
+          pourChannel={props.pourChannel ?? null}
+          cameraPreset={props.cameraPreset ?? "front"}
+          onFps={setFps}
         />
+        {highQuality && (
+          <EffectComposer multisampling={0} enableNormalPass>
+            <SSAO
+              samples={16}
+              radius={0.08}
+              intensity={14}
+              luminanceInfluence={0.5}
+              worldDistanceThreshold={1}
+              worldDistanceFalloff={0.2}
+              worldProximityThreshold={0.5}
+              worldProximityFalloff={0.2}
+            />
+            <Bloom
+              intensity={0.5}
+              luminanceThreshold={0.78}
+              luminanceSmoothing={0.3}
+              mipmapBlur
+            />
+          </EffectComposer>
+        )}
       </Suspense>
     </Canvas>
   );
