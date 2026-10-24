@@ -26,4 +26,4 @@ routes:
   vial_D: {well_1: null, well_2: null, well_3: null, well_4: null}
 
 # which liquid each vial holds (voice + the camera colour check use it)
-vials: {vial_A: blue, vial_B: red, vial_C: green, vial_D: yellow}
+vials: {vial_A: red, vial_B: blue, vial_C: green, vial_D: yellow}   # vial A = the "blood" sample (red-tinted)
