@@ -5,7 +5,7 @@ Degrees, follower frame (arm_server.py); columns J1..J6 + gripper (J7)."""
 
 NAME = 'vial_B'
 LABEL = 'rest -> vial B initial position: reach vial B in its rack slot and close the gripper on it'
-SOURCE = '20261024_155121 frames ..375'
+SOURCE = 'vial_B_20261024_155121 frames ..375'
 HZ = 20.000
 INITIAL_POSITION = {1: 14.50, 2: 92.30, 3: 33.90, 4: 51.60, 5: -11.40, 6: 0.50, 7: 38.40}
 POINTS = [
