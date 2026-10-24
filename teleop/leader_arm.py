@@ -4,11 +4,12 @@ Mapping derived from LeRobot's rebot_102_leader (joint_directions) and rebot_b60
 (joint_directions = -1): follower_motor_deg = scale * leader_raw_deg, measured from each arm's zero pose.
 """
 import json
+import os
 from pathlib import Path
 
 from motorbridge_smart_servo import FashionStarServo
 
-LEADER_PORT = "COM14"
+LEADER_PORT = os.environ.get("LEADER_PORT", "COM14")
 LEADER_BAUD = 1_000_000
 HERE = Path(__file__).resolve().parent
 LEADER_CAL_FILE = HERE / "leader_calibration.json"
