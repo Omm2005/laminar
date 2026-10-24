@@ -58,6 +58,8 @@ def main():
     # 100 Hz keeps the candleLight adapter's TX queue well below saturation (7 commands per tick)
     ap.add_argument("--hz", type=float, default=100.0, help="control loop rate")
     ap.add_argument("--max-speed", type=float, default=180.0, help="follower joint speed limit while tracking, deg/s")
+    ap.add_argument("--smooth-ms", type=float, default=60.0,
+                    help="low-pass time constant on the leader's angles, ms (0 = raw; the leader updates in steps)")
     ap.add_argument("--keep-grip", action="store_true",
                     help="on stop, return the arm to rest but leave the gripper where it is")
     ap.add_argument("--ramp-speed", type=float, default=20.0, help="speed when easing onto the leader / back to zero, deg/s")
@@ -88,6 +90,7 @@ def main():
     cmd = {}  # follower targets, degrees relative to the follower zero pose
     regrip = {"t": 0.0}  # last time the gripper was re-enabled
     grip_stall = {"since": 0.0, "target": 0.0}   # when the jaws last moved / got a new target
+    smooth: dict[int, float] = {}                # low-passed leader goal (--smooth-ms)
 
     def send_all():
         for mid in ids:
@@ -228,6 +231,13 @@ def main():
             if time.time() - last_leader_t > LEADER_TIMEOUT:
                 print("\nLost the leader arm - stopping.")
                 break
+            # The leader's angles arrive as steps (held for a few loops, then a jump), which the follower
+            # reproduced as hold-jump-hold. A first-order low-pass spreads each step over ~smooth_ms.
+            if args.smooth_ms > 0:
+                a = min(1.0, elapsed / (args.smooth_ms / 1000.0))
+                for m in ids:
+                    smooth[m] = goal[m] if m not in smooth else smooth[m] + a * (goal[m] - smooth[m])
+                goal = dict(smooth)
             for m in ids:
                 step = args.max_speed * elapsed * (6.0 if m == GRIPPER else 1.0)  # gripper travels 6x the leader angle
                 cmd[m] += max(-step, min(step, goal[m] - cmd[m]))
