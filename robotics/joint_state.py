@@ -17,8 +17,11 @@ _MIN_PERIOD_S = 0.1  # 10 Hz
 _last_t = 0.0
 
 
-def write(joints) -> None:
-    """Dump {"t": ms, "joints": [j1..j6]} if at least 100 ms since the last write."""
+def write(joints, commanded=None) -> None:
+    """Dump {"t": ms, "joints": [measured j1..j6], "commanded"?: [target j1..j6]} if
+    at least 100 ms since the last write. `joints` is the measured position (what the
+    sensors report, used by the dashboard gauges and 3D model); `commanded` is the
+    latest target, included if the caller has it."""
     global _last_t
     now = time.perf_counter()
     if now - _last_t < _MIN_PERIOD_S:
@@ -26,10 +29,10 @@ def write(joints) -> None:
     _last_t = now
     tmp = _PATH.with_suffix(".tmp")
     try:
-        tmp.write_text(json.dumps(
-            {"t": time.time() * 1000.0, "joints": [float(x) for x in joints]},
-            separators=(",", ":"),
-        ))
+        payload = {"t": time.time() * 1000.0, "joints": [float(x) for x in joints]}
+        if commanded is not None:
+            payload["commanded"] = [float(x) for x in commanded]
+        tmp.write_text(json.dumps(payload, separators=(",", ":")))
         os.replace(tmp, _PATH)
     except OSError:
         pass  # best-effort; never block the control loop

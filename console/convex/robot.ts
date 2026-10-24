@@ -7,7 +7,8 @@ export const pushTelemetry = mutation({
     jobId: v.optional(v.id("jobs")),
     samples: v.array(v.object({
       t: v.number(),
-      joints: v.array(v.number()),
+      joints: v.array(v.number()),                 // measured, for gauges + 3D model
+      commanded: v.optional(v.array(v.number())),  // target (optional)
       gripperTorque: v.optional(v.number()),
       pourDeg: v.optional(v.number()),
     })),
@@ -18,6 +19,7 @@ export const pushTelemetry = mutation({
         jobId: args.jobId,
         t: s.t,
         joints: s.joints,
+        commanded: s.commanded,
         gripperTorque: s.gripperTorque,
         pourDeg: s.pourDeg,
       });

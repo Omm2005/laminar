@@ -66,10 +66,13 @@ def main() -> None:
             s = read_sample()
             if s and s.get("t") and s["t"] != last_t:
                 last_t = s["t"]
-                batch.append({
+                sample = {
                     "t": float(s["t"]),
                     "joints": [float(x) for x in s.get("joints", [])],
-                })
+                }
+                if "commanded" in s:
+                    sample["commanded"] = [float(x) for x in s["commanded"]]
+                batch.append(sample)
             if len(batch) >= a.batch:
                 try:
                     convex.mutation("robot:pushTelemetry",

@@ -51,7 +51,8 @@ export default defineSchema({
   telemetry: defineTable({
     jobId: v.optional(v.id("jobs")),
     t: v.number(),
-    joints: v.array(v.number()), // length 6, J1..J6 in degrees
+    joints: v.array(v.number()),              // MEASURED J1..J6 in degrees (dashboard + 3D model)
+    commanded: v.optional(v.array(v.number())), // target J1..J6 the arm_server is driving to
     gripperTorque: v.optional(v.number()),
     pourDeg: v.optional(v.number()),
   }).index("by_jobId_t", ["jobId", "t"])
