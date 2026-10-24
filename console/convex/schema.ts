@@ -113,4 +113,42 @@ export default defineSchema({
   })
     .index("by_t", ["t"])
     .index("by_jobId_t", ["jobId", "t"]),
+
+  /** Vials sitting on the bench. slot 1..N, letter is the display label. */
+  vials: defineTable({
+    slot: v.number(),
+    letter: v.string(),
+    contents: v.string(),
+    volumeMl: v.number(),
+    updatedAt: v.number(),
+  }).index("by_slot", ["slot"]),
+
+  /** 12-channel reservoir, one row per channel. targetMl is "what the technician wants it to end up at". */
+  channels: defineTable({
+    number: v.number(),
+    contents: v.string(),
+    currentMl: v.number(),
+    targetMl: v.number(),
+    capacityMl: v.number(),
+    updatedAt: v.number(),
+  }).index("by_number", ["number"]),
+
+  /** Chat thread for the WORK tab. One thread for v1. */
+  messages: defineTable({
+    threadId: v.string(),
+    role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool")),
+    text: v.string(),
+    tool: v.optional(v.object({
+      name: v.string(), // "propose_plan" | "ask_clarification" | "answer" | "set_constraint"
+      args: v.any(),
+    })),
+    createdAt: v.number(),
+  }).index("by_thread_t", ["threadId", "createdAt"]),
+
+  /** Technician-tunable key/value settings (e.g. tolerance_ml). */
+  settings: defineTable({
+    key: v.string(),
+    value: v.any(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
 });

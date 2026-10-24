@@ -13,6 +13,7 @@ Env:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -21,6 +22,9 @@ import time
 from pathlib import Path
 
 from convex import ConvexClient
+
+# unbuffered stdout so the bench windows show the banner and errors immediately
+print_f = functools.partial(print, flush=True)
 
 HERE = Path(__file__).resolve().parent
 LAMINAR = HERE.parent.parent
@@ -55,7 +59,7 @@ def main() -> None:
     a = ap.parse_args()
 
     url = read_convex_url()
-    print(f"stream_joints: {JOINT_STATE_FILE} -> {url} (job={a.job_id or '-'}, "
+    print_f(f"stream_joints: {JOINT_STATE_FILE} -> {url} (job={a.job_id or '-'}, "
           f"{int(1/a.period)} Hz, batch {a.batch})")
     convex = ConvexClient(url)
 
@@ -80,7 +84,7 @@ def main() -> None:
                 try:
                     convex.mutation("robot:pushTelemetry", payload)
                 except Exception as e:
-                    print(f"[stream_joints] push failed, skipping batch: {e!r}", file=sys.stderr)
+                    print_f(f"[stream_joints] push failed, skipping batch: {e!r}", file=sys.stderr)
                 batch = []
             time.sleep(a.period)
     except KeyboardInterrupt:
@@ -92,8 +96,8 @@ def main() -> None:
                 convex.mutation("robot:pushTelemetry", payload)
             except Exception:
                 pass
-        print()
-        print("stream_joints: stopped")
+        print_f()
+        print_f("stream_joints: stopped")
 
 
 if __name__ == "__main__":

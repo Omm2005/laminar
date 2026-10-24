@@ -34,7 +34,7 @@ function Start-Loop {
 Set-Location '$Cwd'
 while (`$true) {
     Write-Host '===== $Title : starting =====' -ForegroundColor Cyan
-    & '$venv' '$Script'
+    & '$venv' -u '$Script'
     `$code = `$LASTEXITCODE
     Write-Host "===== $Title : exited with code `$code, restarting in 10 s (Ctrl+C to stop) =====" -ForegroundColor Yellow
     Start-Sleep -Seconds 10
