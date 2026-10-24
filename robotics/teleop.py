@@ -26,6 +26,7 @@ except ImportError:
     msvcrt = None
 
 GRIPPER = 7
+RUN_MODE = 2             # RobStride feedback mode field: 0 reset, 1 calibration, 2 running
 # torque-limited impedance for the gripper so it can't crush things (values from LeRobot's RS profile)
 GRIP_KP = 12.0          # N.m / rad
 GRIP_DAMPING = 1.5      # MIT kd
@@ -81,6 +82,7 @@ def main():
     bus = RobStrideBus()
     enabled = False
     cmd = {}  # follower targets, degrees relative to the follower zero pose
+    regrip = {"t": 0.0}  # last time the gripper was re-enabled
 
     def send_all():
         for mid in ids:
@@ -106,6 +108,11 @@ def main():
                 raise RuntimeError(f"follower J{mid} fault 0x{st['fault']:02x}")
             if st["temp"] > TEMP_LIMIT_C:
                 raise RuntimeError(f"follower J{mid} temperature {st['temp']:.0f} C")
+            # a gripper that drops out of run mode (mode 2) takes commands but applies no torque: re-enable it
+            if mid == GRIPPER and st.get("mode") != RUN_MODE and now - regrip["t"] > 1.0:
+                regrip["t"] = now
+                bus.enable(mid)
+                print(f"\ngripper was in mode {st.get('mode')}, not running: re-enabled", flush=True)
 
     def ease_to(get_goal, label):
         """Smoothstep from the current command to a (possibly moving) goal at --ramp-speed."""
@@ -154,10 +161,21 @@ def main():
         for mid in ids:
             bus.enable(mid)
         enabled = True
-        t_end = time.time() + 0.5
-        while time.time() < t_end:
-            send_all()
-            time.sleep(dt)
+        # an enable frame can be lost (seen on the gripper after a power cycle: it then takes commands but applies
+        # no torque). Hold, check every motor reports run mode, re-send the enable to any that don't.
+        for attempt in range(3):
+            t_end = time.time() + 0.5
+            while time.time() < t_end:
+                send_all()
+                time.sleep(dt)
+            idle = [m for m in ids if bus.state.get(m, {}).get("mode") != RUN_MODE]
+            if not idle:
+                break
+            print(f"motors not running yet: {['J%d' % m for m in idle]} - enabling again")
+            for mid in idle:
+                bus.enable(mid)
+        else:
+            raise RuntimeError(f"motors would not enter run mode: {['J%d' % m for m in idle]}")
         check_follower()
 
         last_leader = leader.read_follower_targets()
