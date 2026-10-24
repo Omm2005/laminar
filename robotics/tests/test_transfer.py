@@ -146,7 +146,7 @@ def _camera_pour(tmp_path, px, conf=1.0):
     cp.tracker = types.SimpleNamespace(read=lambda name: LevelSample(px * 0.02, px, conf, time.time()))
     cp.asked = []
 
-    def fake_pour(direction, target, max_tilt, view=True):
+    def fake_pour(direction, target, max_tilt, view=True, on_tick=None):
         cp.asked.append(target)
         return types.SimpleNamespace(ok=True, final_ml=(target * 4.0), result="done", reason="target reached")
     cp.pour = fake_pour
