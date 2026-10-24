@@ -1,0 +1,19 @@
+# Pour mechanics. All angles in degrees of pour_joint from the follower zero pose.
+# flow_table_ml_per_s maps { angle_deg: measured mL/s at that angle }.
+# `direction` is +1 if increasing the joint angle tilts the vial lip DOWN (pours out),
+# -1 if decreasing it does. Determine with jog.py once a vial is held.
+
+pour_joint: 6              # which joint rotates to tilt the vial (wrist_roll on the B601-RS)
+direction: +1              # +1 = pour_joint angle increase pours; -1 = decrease pours
+
+rest_deg: 0.0              # pour_joint value when the vial is upright
+onset_deg: 35.0            # tilt we expect the first drop at (just past lip)
+pour_deg: 50.0             # default aggressive tilt angle; adaptive_pour picks from flow_table
+
+tilt_speed_deg_s: 10.0     # how fast pour_joint moves to the tilt target
+lead_ml: 0.3               # untilt early by this many mL to account for in-flight liquid
+
+flow_table_ml_per_s:       # measured mL/s at each tilt angle; edit by hand after each pour
+  40: 0.8
+  50: 1.5
+  60: 2.5
