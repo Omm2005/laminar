@@ -6,6 +6,7 @@ import math
 import os
 import queue
 import struct
+import sys
 import threading
 import time
 
@@ -59,6 +60,17 @@ def _u16(x, lo, hi):
 
 def _f(u, lo, hi):
     return u / 65535 * (hi - lo) + lo
+
+
+def fine_timer():
+    """Windows rounds time.sleep() up to its ~15.6 ms timer tick (Python < 3.11), so a 100 Hz loop runs at
+    ~55 Hz with jitter. Ask for 1 ms timer resolution for this process (released when it exits)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
 
 
 class RobStrideBus:

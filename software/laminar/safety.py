@@ -1,4 +1,5 @@
-"""E-stop watchdog. Sense owns the real UNO Q serial source in sense/.
+"""
+E-stop watchdog. Sense owns the real UNO Q serial source in sense/.
 
 The UNO Q sends 'HB' at 20 Hz and 'ESTOP' on a button press. The watchdog calls
 arm.stop() on ESTOP or after timeout_s (250 ms) with no message.

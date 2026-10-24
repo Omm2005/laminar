@@ -1,0 +1,24 @@
+# spots.yaml: taught arm poses that the shared moves aim at.
+#
+# Every value is a list of 6 joint angles in DEGREES (J1..J6), in the same follower frame that
+# arm_server.py and the recorder's data.csv use. `null` = not taught yet.
+#
+# How to fill this in (never type numbers by hand):
+#   slot_X  : the pose a grab recording ENDS in (tube in the gripper, still sitting in its slot).
+#             python move.py from-recording slot_A recordings/<run>/data.csv
+#   well_N  : the pour-ready pose over well N: tube UPRIGHT, gripper lowered so the tube lip is just
+#             above the well, positioned so that tilting with wrist roll lands the lip over the well.
+#             Jog the arm there with a tube in the gripper, then:
+#             python move.py teach well_1
+#
+# Travel uses only the x, y and heading of these poses; lift/lower distances set the heights.
+slots:
+  slot_A: null
+  slot_B: null
+  slot_C: null
+  slot_D: null
+wells:
+  well_1: null
+  well_2: null
+  well_3: null
+  well_4: null

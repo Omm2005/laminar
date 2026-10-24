@@ -1,6 +1,6 @@
 """Forward kinematics for the reBot Arm B601-RS from the vendor URDF (model/rebot_b601_rs.urdf).
 
-Joint angles are the follower motor angles in degrees from the zero pose (same frame as teleop/arm_server).
+Joint angles are the follower motor angles in degrees from the zero pose (same frame as teleop.py / arm_server.py).
 The tool frame is gripper_end; its z axis is the wrist-roll (approach) axis.
 """
 import xml.etree.ElementTree as ET

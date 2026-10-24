@@ -16,6 +16,7 @@ from . import telemetry
 from .arm import ArmError, ArmStopped, FakeArm
 from .bench import pose, rack_slots
 from .level import FakeLevelTracker
+from .pour import PourController, PourFrame, PourState, run_pour
 
 
 @dataclass
@@ -74,7 +75,8 @@ class Skills(ABC):
 
 # ---------------------------------------------------------------- fakes
 
-FAULTS = {"wrong_tube", "grasp_slip", "drop_in_carry", "pour_overshoot", "level_stuck"}
+FAULTS = {"wrong_tube", "grasp_slip", "drop_in_carry", "pour_overshoot", "level_stuck",
+          "wrong_color", "surge", "high_onset", "camera_blocked"}
 
 # Simulated liquids: flow = k * (tilt - onset) mL/s above onset, lag = s from tilt-back until flow stops.
 FAKE_LIQUIDS = {
@@ -101,6 +103,49 @@ class FakeWorld:
             "V2": {"type": "vial_10ml", "liquid": "red", "ml": 8.0},
         }
         return cls(rack=rack, vials=vials, station_tube=bench["station"]["tube_type"])
+
+
+class FakePourCamera:
+    """Pour physics plus a pretend side cam that emits PourFrames, as Sense's OpenCV code will."""
+
+    def __init__(self, skills: FakeSkills, liquid: str):
+        self.s, self.liquid = skills, liquid
+        self.p = dict(FAKE_LIQUIDS[liquid])
+        if "high_onset" in skills.faults:
+            self.p["onset"] += 0.6  # nearly empty vial: has to tilt much further before anything comes out
+        self.t = 0.0
+        self.flow_true = 0.0
+        self.flow_est = 0.0
+        self.max_tilt = 0.0
+        self.seq = 0
+        self._pour_start: float | None = None
+
+    def physics(self, tilt: float, dt: float) -> None:
+        self.t += dt
+        self.max_tilt = max(self.max_tilt, tilt)
+        flow = self.p["k"] * max(0.0, tilt - self.p["onset"])
+        if flow > 0 and self._pour_start is None:
+            self._pour_start = self.t
+        if "surge" in self.s.faults and self._pour_start is not None and 1.0 < self.t - self._pour_start < 1.4:
+            flow *= 3.0
+        self.flow_true = flow
+        self.s.level.add(flow * dt)
+
+    def capture(self) -> PourFrame:
+        self.seq += 1
+        lvl = self.s.level
+        seen_flow = 0.0 if lvl.stuck else self.flow_true
+        self.flow_est += 0.4 * (seen_flow + self.s._rng.normal(0, 0.03) - self.flow_est)  # smoothing lag
+        ml = lvl.read().ml
+        pouring = self.flow_est > 0.1
+        color = self.liquid if (pouring or ml > 0.05) else "none"
+        if "wrong_color" in self.s.faults and color != "none":
+            color = next(c for c in FAKE_LIQUIDS if c != self.liquid)
+        conf = 1.0
+        if "camera_blocked" in self.s.faults and self._pour_start is not None and self.t - self._pour_start > 1.0:
+            conf = 0.1
+        return PourFrame(ts=self.t, ml=ml, flow_ml_s=self.flow_est, pouring=pouring, color=color,
+                         color_conf=0.9 if color != "none" else 0.0, conf=conf, seq=self.seq)
 
 
 class FakeSkills(Skills):
@@ -193,46 +238,27 @@ class FakeSkills(Skills):
             return SkillResult(False, f"vial {w.held} has {vial['ml']:.1f} mL, cannot pour {ml} mL")
         if liquid not in FAKE_LIQUIDS:
             return SkillResult(False, f"no pour recipe for liquid '{liquid}'")
-        p = FAKE_LIQUIDS[liquid]
-        j = b["pour_joint"] - 1
         base = pose(b, "station_pour")
         self.arm.move_q(base, 1.0)
         self.level.zero()
 
-        dt, t, tilt, flow = 1 / 30, 0.0, 0.0, 0.0
-        ref_ml, ref_t = 0.0, 0.0
-        while True:
-            t += dt
-            measured = self.level.read().ml
-            remaining = ml - measured
-            if remaining <= flow * p["lag"]:
-                break  # cut-off: what is still in flight lands during tilt-back
-            setpoint = p["setpoint"] if remaining > 0.6 else 0.3
-            tilt += 0.6 * dt if flow < setpoint else -1.0 * dt
-            tilt = max(0.0, tilt)
-            flow = p["k"] * max(0.0, tilt - p["onset"])
-            self.level.add(flow * dt)
-            q = base.copy()
-            q[j] += tilt
-            self.arm.stream_q([q], dt)
-            telemetry.log("pour.sample", {"t": round(t, 3), "tilt": round(tilt, 4), "ml": round(measured, 3), "flow": round(flow, 3)})
-            # abort if we expect flow but the level is not rising
-            if measured > ref_ml + 0.05 or flow < 0.2:
-                ref_ml, ref_t = measured, t
-            if t - ref_t > 1.0:
-                self.arm.stream_q([base], dt)
-                return SkillResult(False, "level not rising while tilted, pour aborted", {"tilt": tilt, "t": t})
-            if t > 30:
-                self.arm.stream_q([base], dt)
-                return SkillResult(False, "pour timed out after 30 s")
-
-        self.level.add(flow * p["lag"] * self._rng.uniform(0.9, 1.1))
-        if "pour_overshoot" in self.faults:
-            self.level.add(0.6)
-        self.arm.stream_q([base], dt)
+        dt = 1 / 30
+        cam = FakePourCamera(self, liquid)
+        ctrl = PourController(ml, liquid)
+        run_pour(self.arm, ctrl, lambda: cam.capture(), base, b["pour_joint"] - 1, dt,
+                 now=lambda: cam.t, before_frame=lambda tilt: cam.physics(tilt, dt))
+        if ctrl.state == PourState.DONE:
+            # what was still in flight lands during tilt-back
+            self.level.add(cam.flow_true * cam.p["lag"] * self._rng.uniform(0.9, 1.1))
+            if "pour_overshoot" in self.faults:
+                self.level.add(0.6)
         dispensed = self.level.read().ml
-        vial["ml"] -= dispensed
-        return SkillResult(True, "", {"dispensed_ml": round(dispensed, 3), "target_ml": ml, "pour_s": round(t, 2)})
+        vial["ml"] -= max(0.0, dispensed)
+        info = {"dispensed_ml": round(dispensed, 3), "target_ml": ml, "pour_s": round(ctrl.elapsed, 2),
+                "max_tilt": round(cam.max_tilt, 3)}
+        if ctrl.state != PourState.DONE:
+            return SkillResult(False, f"pour aborted: {ctrl.reason}", info)
+        return SkillResult(True, "", info)
 
     @logged
     def verify(self, target, expect_ml, tol):

@@ -60,7 +60,7 @@ def test_drop_in_carry_fails_carry():
 
 def test_level_stuck_aborts_pour():
     res = run_job(make_system(fake=True, time_scale=0, faults={"level_stuck"}))
-    assert not res["pour"].ok and "not rising" in res["pour"].reason
+    assert not res["pour"].ok and "no flow at max tilt" in res["pour"].reason
 
 
 def test_overshoot_is_caught_at_verify():

@@ -4,12 +4,21 @@ Mapping derived from LeRobot's rebot_102_leader (joint_directions) and rebot_b60
 (joint_directions = -1): follower_motor_deg = scale * leader_raw_deg, measured from each arm's zero pose.
 """
 import json
-import os
 from pathlib import Path
 
 from motorbridge_smart_servo import FashionStarServo
 
-LEADER_PORT = os.environ.get("LEADER_PORT", "COM14")
+LEADER_PORT = "COM14"  # fallback; the CH340 port number changes with the USB socket, see find_leader_port()
+
+
+def find_leader_port(default=LEADER_PORT):
+    """The leader's CH340 USB-serial adapter (VID 1A86), whatever COM number Windows gave it."""
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return default
+    ch340 = [p.device for p in list_ports.comports() if p.vid == 0x1A86]
+    return ch340[0] if len(ch340) == 1 else default
 LEADER_BAUD = 1_000_000
 HERE = Path(__file__).resolve().parent
 LEADER_CAL_FILE = HERE / "leader_calibration.json"
@@ -33,7 +42,8 @@ def unwrap(raw, center):
 
 
 class LeaderArm:
-    def __init__(self, port=LEADER_PORT, baudrate=LEADER_BAUD):
+    def __init__(self, port=None, baudrate=LEADER_BAUD):
+        port = port or find_leader_port()
         self.bus = FashionStarServo(port, baudrate=baudrate)
         self.ids = list(MAPPING)
         missing = [i for i in self.ids if not self.bus.ping(i)]
