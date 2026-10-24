@@ -59,9 +59,10 @@ def main():
     ap.add_argument("--duration", type=float, default=None, help="stop automatically after this many seconds")
     ap.add_argument("--max-start-mismatch", type=float, default=25.0,
                     help="refuse to start if any joint differs between leader and follower by more than this (deg)")
+    ap.add_argument("--leader-port", default=None, help="leader serial port (default: the CH340 adapter, auto-detected)")
     ap.add_argument("--record", action="store_true", help="record camera video + joint data")
     ap.add_argument("--fps", type=float, default=20.0, help="recording frame rate")
-    ap.add_argument("--camera", type=int, default=2, help="camera index (2 = Innomaker U20CAM on this laptop)")
+    ap.add_argument("--camera", type=int, default=2, help="camera index (2 = Innomaker U20CAM on this laptop; -1 = joint data only, no video)")
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--height", type=int, default=480)
     args = ap.parse_args()
@@ -73,9 +74,9 @@ def main():
     ids = list(JOINTS)
     dt = 1.0 / args.hz
 
-    camera = Camera(args.camera, args.width, args.height) if args.record else None
+    camera = Camera(args.camera, args.width, args.height) if args.record and args.camera >= 0 else None
     recorder = None
-    leader = LeaderArm()
+    leader = LeaderArm(args.leader_port)
     bus = RobStrideBus()
     enabled = False
     cmd = {}  # follower targets, degrees relative to the follower zero pose
@@ -171,13 +172,14 @@ def main():
             return last_leader
 
         ease_to(leader_goal, "Easing follower onto leader pose")
-        if camera:
+        if args.record:
             def sample():
                 state = {m: math.degrees(st["pos"]) - zero[m] for m, st in list(bus.state.items())}
                 return dict(last_leader), dict(cmd), state
             recorder = Recorder(camera, sample, args.fps, {"camera_index": args.camera, "follower_zero_deg": zero})
             recorder.start()
-            print(f"Recording {camera.shape[1]}x{camera.shape[0]} @ {args.fps:g} fps to {recorder.dir}")
+            what = f"{camera.shape[1]}x{camera.shape[0]} video + joints" if camera else "joints only (no camera)"
+            print(f"Recording {what} @ {args.fps:g} fps to {recorder.dir}")
         print("Teleop running - press q (or Esc/Ctrl+C) to stop.")
 
         t_start = time.time()

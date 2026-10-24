@@ -67,14 +67,16 @@ class Recorder:
         self.fps = fps
         self.dir = HERE / "recordings" / time.strftime("%Y%m%d_%H%M%S")
         self.dir.mkdir(parents=True)
-        h, w = camera.shape[:2]
-        self.writer = cv2.VideoWriter(str(self.dir / "video.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+        self.writer = None  # camera=None: joint data only
+        if camera is not None:
+            h, w = camera.shape[:2]
+            self.writer = cv2.VideoWriter(str(self.dir / "video.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
         self.csv_file = open(self.dir / "data.csv", "w", newline="")
         self.csv = csv.writer(self.csv_file)
         ids = list(JOINT_NAMES)
         self.csv.writerow(["frame", "t"] + [f"{kind}.J{m}" for kind in ("action", "command", "state") for m in ids])
         (self.dir / "meta.json").write_text(json.dumps({
-            "fps": fps, "resolution": [w, h], "joint_names": JOINT_NAMES, "units": "degrees from follower zero pose",
+            "fps": fps, "resolution": list(camera.shape[1::-1]) if camera is not None else None, "joint_names": JOINT_NAMES, "units": "degrees from follower zero pose",
             "started": time.strftime("%Y-%m-%d %H:%M:%S"), **meta,
         }, indent=2))
         self.frames = 0
@@ -98,14 +100,17 @@ class Recorder:
             elif delay < -period:
                 self.late += 1  # writing fell behind; keep the timeline by still emitting this frame
             action, command, state = self.get_sample()
-            self.writer.write(self.camera.frame)
+            if self.writer:
+                self.writer.write(self.camera.frame)
             self.csv.writerow([self.frames, f"{self.frames * period:.3f}"]
                               + [f"{d.get(m, float('nan')):.3f}" for d in (action, command, state) for m in ids])
+            self.csv_file.flush()  # readable live (e.g. to mark poses while recording)
             self.frames += 1
 
     def stop(self):
         self._running = False
         self._thread.join(timeout=2.0)
-        self.writer.release()
+        if self.writer:
+            self.writer.release()
         self.csv_file.close()
         return self.dir
