@@ -360,8 +360,10 @@ class ServerTiltJoint:
         sys.path.insert(0, str(REPO_ROOT / "robotics"))
         from arm_client import ArmClient
         self.client = ArmClient()
-        if self.client.status() is None:
-            raise RuntimeError("arm_server is not running: start it with `python mac_run.py arm_server.py` in robotics/")
+        try:
+            self.client.current_joints()     # also refuses a stale status file left by an exited arm_server
+        except RuntimeError as e:
+            raise RuntimeError(f"{e}  Start it with `python mac_run.py arm_server.py` in robotics/") from None
         self.joint, self.soft_limit_deg, self.max_rate_deg_s = joint, soft_limit_deg, max_rate_deg_s
         self.base_deg: float | None = None
         self.lo, self.hi = -math.radians(soft_limit_deg), math.radians(soft_limit_deg)   # until started
@@ -656,9 +658,23 @@ class PourView:
         self.cv2.waitKey(1)
 
 
+def arm_server_running() -> bool:
+    """True if robotics/arm_server.py is up (its status file is fresh)."""
+    sys.path.insert(0, str(REPO_ROOT / "robotics"))
+    from arm_client import ArmClient
+    try:
+        ArmClient().current_joints()
+        return True
+    except (RuntimeError, OSError):
+        return False
+
+
 def _open_joint(backend: str):
     if backend == "server":
         return ServerTiltJoint(6)   # needs `python mac_run.py arm_server.py` running in robotics/
+    if arm_server_running():
+        raise RuntimeError("arm_server is running and owns the CAN adapter: use --backend server "
+                           "(or stop arm_server first)")
     from .motor6 import RobStrideJoint
     print("  direct backend: only J6 is enabled, J1-J5 are LIMP. Use only with the arm folded at rest.")
     j = RobStrideJoint(6)
@@ -686,7 +702,7 @@ def main() -> int:
     ap.add_argument("--backend", choices=["server", "direct"], default=None,
                     help="server = arm_server holds J1-J5 and streams J6 (use this with the arm raised); "
                          "direct = only J6 enabled, J1-J5 limp (arm folded at rest only). "
-                         "Default: server for real pours, direct for --sim --real-motor")
+                         "Default: server for real pours; for --sim --real-motor, server if arm_server is running, else direct")
     ap.add_argument("--log", default=None, help="pour: PourGuide .jsonl log")
     ap.add_argument("--sim", action="store_true",
                     help="simulated test: calibrate writes a fake camera calibration; pour uses simulated camera "
@@ -736,7 +752,7 @@ def main() -> int:
             print(f"simulated pour {a.side} into A (simulated motor), scenario {a.scenario}")
             r = simulate(direction, a.scenario, a.target, realtime=0.3, calib_path=SIM_CALIB)
             return 0 if r.ok else 1
-        backend = a.backend or "direct"
+        backend = a.backend or ("server" if arm_server_running() else "direct")
         try:
             joint = _open_joint(backend)
         except Exception as e:

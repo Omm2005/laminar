@@ -110,8 +110,8 @@ def test_pour_motor6_runs_on_the_tilt_stream_and_ends_upright(monkeypatch):
     tilts = []
 
     class FakeClient:
-        def status(self):
-            return {"command": {}}
+        def current_joints(self):
+            return {j: 0.0 for j in range(1, 7)}
 
         def start_tilt_stream(self, joint=6, max_rate_deg_s=120.0, timeout_s=0.5):
             return -5.0

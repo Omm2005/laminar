@@ -58,6 +58,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hold-grip", action="store_true")
     ap.add_argument("--hold-torque", type=float, default=1.0)
+    ap.add_argument("--idle-min", type=float, default=IDLE_TIMEOUT_S / 60,
+                    help="rest and exit after this many minutes with no command (camera calibration can take long)")
     args = ap.parse_args()
     zero = load_follower_zero()
     ids = list(JOINTS)
@@ -342,8 +344,9 @@ def main():
             if time.time() - t_status > 0.5:
                 t_status = time.time()
                 write_status()
-            if time.time() - t_idle > IDLE_TIMEOUT_S:
-                print("idle timeout", flush=True)
+            if time.time() - t_idle > args.idle_min * 60:
+                print(f"idle timeout: no command for {args.idle_min:.0f} min, resting and exiting", flush=True)
+                last["result"] = f"idle timeout after {args.idle_min:.0f} min"
                 raise KeyboardInterrupt
     except KeyboardInterrupt:
         pass
