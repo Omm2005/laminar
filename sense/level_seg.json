@@ -1,0 +1,27 @@
+{
+  "in_h": 128,
+  "in_w": 32,
+  "held_back_error_px": 4.1,
+  "held_back_error_of_box": 0.0386,
+  "p95_error_of_box": 0.1887,
+  "train_crops": 38100,
+  "held_back_crops": 1380,
+  "trained": "2026-10-24 11:31:36",
+  "test": {
+    "filled (>25 %)": {
+      "n": 434,
+      "mean_ml": 0.261,
+      "p95_ml": 0.938
+    },
+    "spill / little (2-25 %)": {
+      "n": 201,
+      "mean_ml": 0.079,
+      "p95_ml": 0.187
+    },
+    "empty": {
+      "n": 1633,
+      "mean_ml": 0.026,
+      "p95_ml": 0.211
+    }
+  }
+}

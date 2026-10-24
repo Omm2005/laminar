@@ -138,3 +138,21 @@ def test_pour_uses_the_percent_calibration(tmp_path):
     finally:
         pour_guide.time = real
     assert r.ok and 0.47 <= tracker.ml["A"] / 4.0 <= 0.55      # half of a full (4 mL) column
+
+
+# ---- live outputs: wrong side, flow, % full, rim overflow
+
+def test_wrong_channel_says_which_side():
+    r = simulate(1, "wrong_column", verbose=False)       # the stream lands in C, right of A
+    assert r.wrong_column == "C" and r.wrong_side == "right" and "RIGHT of A" in r.reason
+
+
+def test_reports_percent_full_and_flow():
+    r = simulate(1, "normal", target_frac=0.9, verbose=False)
+    assert 0.85 <= r.final_full <= 0.95 and r.avg_flow_ml_s > 0
+    assert all("full" in x and "flow_ml_s" in x for x in r.log)
+
+
+def test_stops_at_the_rim_when_filling_to_the_top():
+    r = simulate(1, "normal", target_frac=1.0, verbose=False)   # targets above 1.0 are refused by PourGuide
+    assert not r.ok and "rim" in r.reason

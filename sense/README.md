@@ -1,5 +1,7 @@
 # Laminar vision starter code
 
+**Level model (no calibration, draw a box, arm pours from it): see [MODEL.md](MODEL.md).**
+
 ```
 pip install "opencv-python>=4.7" numpy
 ```

@@ -10,3 +10,13 @@ software/level_ref_sim.png
 sense/level_calib.json
 sense/level_ref.png
 sense/level_boxes.png
+# training data stays local; the recorded pour / live episodes are kept
+sense/seg_data/*
+!sense/seg_data/frames/
+sense/seg_data/frames/*
+!sense/seg_data/frames/pour_*/
+!sense/seg_data/frames/live_*/
+sense/seg_data/frames/*/frame_*.jpg
+sense/live_boxes.json
+sense/scene_seg.onnx
+sense/scene_seg.json

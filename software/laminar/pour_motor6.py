@@ -26,6 +26,7 @@ Real pours run through robotics/arm_server.py (it holds J1-J5 while this streams
     python -m laminar.pour_motor6 calibrate          # camera calibration: column B at 25/50/75/100 % full
     python -m laminar.pour_motor6 pour right         # pour into A; returns at once if not calibrated
     python -m laminar.pour_motor6 pour left
+    python -m laminar.pour_motor6 pour right --boxes --new-boxes   # no calibration: draw the target box(es)
     python -m laminar.pour_motor6 home               # every joint to its calibrated zero, motors off
 Simulated test (fake camera calibration, simulated camera and liquid):
     python -m laminar.pour_motor6 calibrate --sim                 # fake camera calibration
@@ -52,6 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "sense"))
 
 SENSE_DIR = REPO_ROOT / "sense"
 DEFAULT_CALIB = SENSE_DIR / "level_calib.json"
+MIN_READ_HZ = 15            # --boxes: fewer level readings a second than this and the fill rate is blind
 
 # (fill fraction of target where the step starts, max fill fraction per second from there on)
 RATE_SCHEDULE = [(0.0, 0.25), (0.3, 0.15), (0.6, 0.08), (0.8, 0.04), (0.9, 0.02)]
@@ -69,6 +71,8 @@ class PourConfig:
     back_deg_s: float = 60.0        # final tilt back to upright
     lag_s: float = 0.3              # s from tilt-back until the stream stops (PourGuide's early stop)
     dry_s: float = 2.0              # at max tilt with no flow this long -> abort
+    flow_step: float = 0.03         # flow = the level reaching a new high by this much (fill of target):
+                                    # noisy readings wobble up and down, they never count as flow
     timeout_s: float = 60.0
     hz: float = 30.0
     overflow_margin: float = 0.05   # final fill above target + this = overfilled
@@ -82,9 +86,13 @@ class PourResult:
     column: str
     direction: str
     final_fill: float | None = None  # fraction of target
+    final_full: float | None = None  # fraction of the whole column (rim = 1.0)
     final_ml: float | None = None
     duration_s: float = 0.0
     max_tilt_deg: float = 0.0
+    avg_flow_ml_s: float | None = None
+    wrong_column: str | None = None  # where the liquid went instead, if it missed
+    wrong_side: str | None = None    # "left" | "right" of the target, so the arm can correct
     log: list[dict] = field(default_factory=list)
     guide: dict | None = None        # PourGuide.summary()
 
@@ -251,10 +259,16 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     guide = PourGuide(tracker, column, target_frac=cfg.target_frac, lag_s=cfg.lag_s,
                       no_rise_s=0, empty=empty, log_path=log_path)
     guide.begin()
+    col = tracker.columns[column]
+    box_h = float(col.roi[3])
+    ml_full = col.px_to_ml(box_h) or None                       # mL in a full column (None: no curve)
+    start_ml = {k: tracker.read(k).ml for k in tracker.columns}   # to see which column rises if it misses
+    to_full = guide.target_px / box_h                             # fill-of-target -> fraction of the column
     dt = 1.0 / cfg.hz
     tilt = 0.0
     t0 = last_flow = clock.time()
     flowing = False
+    peak = None                     # highest trusted fill so far
     log: list[dict] = []
     last_action = None
     cmd = None
@@ -269,13 +283,19 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
             if cmd.abort:
                 reason = cmd.reason
                 break
+            if cmd.conf >= 0.5 and cmd.fill * to_full >= 0.98:
+                reason = f"OVERFLOW: column {column} is full to the rim"
+                break
             if now - t0 > cfg.timeout_s:
                 reason = f"pour timed out after {cfg.timeout_s:.0f} s"
                 break
 
             allowed = allowed_rate(cmd.fill)
-            if cmd.rate > 0.01:
-                flowing, last_flow = True, now
+            if cmd.conf >= 0.5 and cmd.phase != "hold":
+                if peak is None:
+                    peak = cmd.fill
+                elif cmd.fill > peak + cfg.flow_step:
+                    peak, flowing, last_flow = cmd.fill, True, now
             if cmd.phase == "hold":
                 action, rate_deg = "hold", 0.0                 # camera unsure: keep the angle
             elif cmd.rate > allowed * cfg.too_fast_factor:
@@ -291,15 +311,18 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
                 break
             joint.move_to(base + direction * math.radians(tilt), vlim=math.radians(cfg.max_rate_deg_s * 1.5))
 
+            flow_ml = cmd.rate * to_full * ml_full if ml_full else None
             rec = {"t": round(now - t0, 3), "tilt_deg": round(tilt, 2), "fill": cmd.fill, "rate": cmd.rate,
-                   "allowed": allowed, "ml": cmd.ml, "phase": cmd.phase, "action": action}
+                   "allowed": allowed, "ml": cmd.ml, "phase": cmd.phase, "action": action,
+                   "full": round(cmd.fill * to_full, 4), "flow_ml_s": round(flow_ml, 3) if flow_ml is not None else None}
             log.append(rec)
             if verbose and action != last_action:
-                print(f"  t={rec['t']:5.2f}s  fill {cmd.fill:6.1%}  rate {cmd.rate:5.1%}/s "
+                print(f"  t={rec['t']:5.2f}s  {column} {rec['full']:4.0%} full  rate {cmd.rate:5.1%}/s "
                       f"(max {allowed:.0%}/s)  tilt {tilt:5.1f} deg  -> {action}")
                 last_action = action
             if on_tick:
-                on_tick({**rec, "side": side, "target_px": guide.target_px})
+                on_tick({**rec, "side": side, "column": column, "target_px": guide.target_px,
+                         "target_full": to_full})
             clock.sleep(dt)
     except KeyboardInterrupt:
         reason = "stopped by operator"
@@ -316,20 +339,33 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     if result == "done" and final_fill is not None and final_fill > 1.0 + cfg.overflow_margin:
         result, reason = "aborted", f"overfilled after stop: {final_fill:.0%} of target (lag longer than {cfg.lag_s:.2f} s?)"
 
+    # missed the column: which neighbour rose, and is it to the left or right of the target?
+    wrong = wrong_side = None
+    rises = {k: tracker.read(k).ml - start_ml[k] for k in tracker.columns if k != column}
+    if result != "done" and rises and ("instead" in reason or "should be empty" in reason):
+        wrong = max(rises, key=rises.get)
+        wrong_side = "right" if tracker.columns[wrong].roi[0] > col.roi[0] else "left"
+        reason += f" - liquid is going to the {wrong_side.upper()} of {column} (into {wrong})"
+
+    flows = [r["flow_ml_s"] for r in log if r.get("flow_ml_s") and r["rate"] > 0.01]
+    final_full = final_fill * to_full if final_fill is not None else None
     if verbose:
-        print(f"  {'DONE' if result == 'done' else 'STOPPED'}: {reason}  (settled at {final_fill:.0%} of target)")
+        print(f"  {'DONE' if result == 'done' else 'STOPPED'}: {reason}  (settled at {final_fill:.0%} of target"
+              + (f", {final_full:.0%} full)" if final_full is not None else ")"))
     if on_tick:
         try:
-            on_tick({"final": True, "side": side, "result": result, "reason": reason, "fill": final_fill,
-                     "target_px": guide.target_px})
+            on_tick({"final": True, "side": side, "column": column, "result": result, "reason": reason,
+                     "fill": final_fill, "full": final_full, "target_px": guide.target_px})
         except KeyboardInterrupt:
             pass
     return PourResult(result == "done", result, reason, column, side,
                       final_fill=round(final_fill, 4) if final_fill is not None else None,
+                      final_full=round(final_full, 4) if final_full is not None else None,
                       final_ml=round(final_ml, 3) if final_ml is not None else None,
                       duration_s=round(clock.time() - t0, 2),
                       max_tilt_deg=round(max((r["tilt_deg"] for r in log), default=0.0), 1),
-                      log=log, guide=guide.summary())
+                      avg_flow_ml_s=round(float(np.mean(flows)), 3) if flows else None,
+                      wrong_column=wrong, wrong_side=wrong_side, log=log, guide=guide.summary())
 
 
 def _tilt_back(joint, base: float, tilt_deg: float, cfg: PourConfig, clock) -> None:
@@ -507,7 +543,8 @@ class SimTracker:
         self.onset, self.k, self.tau = onset_deg, k_ml_s_per_deg, stream_tau_s
         names = ["A", "B", "C", "D", "X1", "X2"]
         curve = [(0.0, 0.0), (self.BOX_PX, self.BOX_PX * self.ML_PER_PX)]
-        self.columns = {n: Column(n, (0, 0, 10, int(self.BOX_PX)), curve) for n in names}
+        x_of = {"X1": 60, "A": 100, "B": 140, "C": 180, "D": 220, "X2": 260}     # left to right
+        self.columns = {n: Column(n, (x_of[n], 0, 30, int(self.BOX_PX)), curve) for n in names}
         self.ml = {n: 0.0 for n in names}
         self.poured = 0.0
         self.flow = 0.0                # stream actually landing, mL/s
@@ -547,7 +584,7 @@ def fake_calibrate(path: str | Path = SIM_CALIB) -> Path:
     """Write a fake camera calibration matching the simulated camera (columns A-D, empty X1, X2)."""
     p = Path(path)
     box, ml = int(SimTracker.BOX_PX), SimTracker.BOX_PX * SimTracker.ML_PER_PX
-    data = {"columns": {c: {"roi": [0, 0, 10, box], "curve": [[0, 0], [box, ml]]} for c in "ABCD"},
+    data = {"columns": {c: {"roi": [100 + 40 * i, 0, 30, box], "curve": [[0, 0], [box, ml]]} for i, c in enumerate("ABCD")},
             "fill_curve": {c: [[0, 0], [box / 4, 0.25], [box / 2, 0.5], [3 * box / 4, 0.75], [box, 1.0]]
                            for c in "ABCD"},
             "capacity_ml": ml, "empty": ["X1", "X2"], "ref_image": "level_ref_sim.png", "fake": True}
@@ -634,17 +671,21 @@ class PourView:
         cv2.putText(img, "target", (x + w + 10, ty + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
         if rec.get("final"):
             ok = rec["result"] == "done"
-            fill = f"{rec['fill']:.0%}" if rec.get("fill") is not None else "?"
+            full = f"{rec['full']:.0%} full" if rec.get("full") is not None else "?"
             good, bad = (80, 220, 80), (80, 80, 255)
-            lines = [(f"POUR {rec['side'].upper()} {'DONE' if ok else 'STOPPED'}  fill {fill} of target",
-                      good if ok else bad), (rec["reason"][:70], good if ok else bad)]
+            words = rec["reason"]
+            lines = [(f"POUR {rec['side'].upper()} into {rec['column']} {'DONE' if ok else 'STOPPED'}: {full}",
+                      good if ok else bad), (words[:75], good if ok else bad)]
+            if len(words) > 75:
+                lines.append((words[75:150], good if ok else bad))
         else:
             white, warn = (240, 240, 240), (80, 160, 255)
             fast = rec["rate"] > rec["allowed"] * 1.15
-            lines = [(f"POUR {rec['side'].upper()}  t={rec['t']:.1f}s  tilt {rec['tilt_deg']:.0f} deg  -> {rec['action']}",
-                      warn if rec["action"] in ("too_fast", "slow_down") else white),
-                     (f"fill {rec['fill']:.0%} of target   rate {rec['rate']:.0%}/s (max {rec['allowed']:.0%}/s)",
-                      warn if fast else white)]
+            flow = f"{rec['flow_ml_s']:.2f} mL/s" if rec.get("flow_ml_s") is not None else ""
+            lines = [(f"POUR {rec['side'].upper()} into {rec['column']}  t={rec['t']:.1f}s  tilt {rec['tilt_deg']:.0f} deg"
+                      f"  -> {rec['action']}", warn if rec["action"] in ("too_fast", "slow_down") else white),
+                     (f"{rec['column']} {rec['full']:.0%} full (target {rec['target_full']:.0%})   flow {flow}"
+                      f"  {rec['rate']:.0%}/s (max {rec['allowed']:.0%}/s)", warn if fast else white)]
         cv2.rectangle(img, (0, 0), (img.shape[1], 12 + 24 * len(lines)), (30, 30, 30), -1)   # dark banner
         for i, (text, color) in enumerate(lines):
             cv2.putText(img, text, (10, 26 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
@@ -667,6 +708,115 @@ def arm_server_running() -> bool:
         return True
     except (RuntimeError, OSError):
         return False
+
+
+class CamRecorder:
+    """Saves every camera frame of a pour (up to `fps` a second) to sense/seg_data/frames/<session>/ as
+    frame_00000.jpg ... (the format record_frames.py writes, so label_new.py can label it later), with
+    times.csv (frame, camera time) and, at the end, pour.json (the boxes, the result and the pour log).
+
+    With a tracker it also writes review.mp4: the same frames with the boxes, levels, target line and
+    the pour's numbers drawn on (set `status` to the latest on_tick record). `cam2` (e.g. a camera on
+    the arm) is put next to it in the review video."""
+
+    def __init__(self, cam, session: str | None = None, fps: float = 10.0, tracker=None, cam2=None):
+        import threading
+        self.cam, self.fps, self.tracker, self.cam2 = cam, fps, tracker, cam2
+        self.status: dict | None = None
+        self._writer = None
+        self.session = session or time.strftime("pour_%Y%m%d_%H%M%S")
+        self.dir = SENSE_DIR / "seg_data" / "frames" / self.session
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.n = 0
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, name="cam-recorder", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        import cv2
+        last_ts, next_t = None, 0.0
+        with open(self.dir / "times.csv", "w") as times:
+            times.write("frame,time\n")
+            while self._running:
+                frame, ts = self.cam.read()
+                if frame is None or ts == last_ts or time.time() < next_t:
+                    time.sleep(0.005)
+                    continue
+                last_ts, next_t = ts, time.time() + 1.0 / self.fps
+                cv2.imwrite(str(self.dir / f"frame_{self.n:05d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                times.write(f"{self.n},{ts:.3f}\n")
+                self.n += 1
+                if self.tracker is not None:
+                    try:
+                        self._review(frame)
+                    except Exception as e:          # never let the review video break the pour
+                        print(f"review video stopped: {e}")
+                        self.tracker = None
+
+    def _review(self, frame) -> None:
+        import cv2
+        from level import draw_overlay
+        img = draw_overlay(frame.copy(), self.tracker.columns, self.tracker)
+        st = self.status or {}
+        if st.get("column") in self.tracker.columns and st.get("target_px"):
+            x, y, w, h = self.tracker.columns[st["column"]].roi
+            ty = int(y + h - st["target_px"])
+            cv2.line(img, (x - 8, ty), (x + w + 8, ty), (255, 0, 255), 1)
+        if st.get("final"):
+            full = f"{st['full']:.0%} full" if st.get("full") is not None else "?"
+            lines = [f"{'DONE' if st['result'] == 'done' else 'STOPPED'}: {full}", st["reason"][:70], st["reason"][70:140]]
+        elif st:
+            lines = [f"t={st['t']:.1f}s  tilt {st['tilt_deg']:.0f} deg  -> {st['action']}",
+                     f"{st['column']} {st['full']:.0%} full (target {st['target_full']:.0%})  "
+                     f"rate {st['rate']:.0%}/s (max {st['allowed']:.0%}/s)"]
+        else:
+            lines = ["waiting (not pouring)"]
+        lines = [time.strftime("%H:%M:%S")] + [t for t in lines if t]
+        cv2.rectangle(img, (0, 0), (img.shape[1], 8 + 20 * len(lines)), (30, 30, 30), -1)
+        for i, text in enumerate(lines):
+            cv2.putText(img, text, (8, 20 + 20 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (240, 240, 240), 1, cv2.LINE_AA)
+        if self.cam2 is not None:
+            other, _ = self.cam2.read()
+            if other is not None:
+                other = cv2.resize(other, (int(other.shape[1] * img.shape[0] / other.shape[0]), img.shape[0]))
+                img = np.hstack([img, other])
+        if self._writer is None:
+            size = (img.shape[1], img.shape[0])
+            path = str(self.dir / "review.mp4")
+            self._writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"avc1"), self.fps, size)  # QuickTime plays H.264
+            if not self._writer.isOpened():
+                self._writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), self.fps, size)
+            self._size = size
+        if (img.shape[1], img.shape[0]) != self._size:
+            img = cv2.resize(img, self._size)
+        self._writer.write(img)
+
+    def stop(self, info: dict | None = None) -> None:
+        self._running = False
+        self._thread.join(timeout=2)
+        if self._writer is not None:
+            self._writer.release()
+            print(f"review video: {(self.dir / 'review.mp4').relative_to(REPO_ROOT)}")
+        if info is not None:
+            (self.dir / "pour.json").write_text(json.dumps(info, indent=1, default=str))
+        print(f"camera recorded: {self.n} frames in {self.dir.relative_to(REPO_ROOT)}")
+
+
+def ask_yes(question: str) -> bool:
+    """y/n question that ignores keys typed earlier (e.g. ENTER pressed in the Terminal while drawing
+    boxes) and asks again on an empty answer."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+    while True:
+        ans = input(question + " [y/n] ").strip().lower()
+        if ans in ("y", "yes"):
+            return True
+        if ans in ("n", "no", "q"):
+            return False
+        print("  type y and ENTER to start, or n to cancel")
 
 
 def _open_joint(backend: str):
@@ -712,6 +862,20 @@ def main() -> int:
                     choices=["normal", "wrong_column", "surge", "dry", "overfill", "blocked"])
     ap.add_argument("--yes", action="store_true", help="skip the safety prompt")
     ap.add_argument("--no-view", action="store_true", help="pour: no live camera window")
+    ap.add_argument("--auto", action="store_true",
+                    help="pour: no calibration. The scene model finds the columns (A, B, C, D left to right), "
+                         "you pick the target letter, the crop model reads the level live")
+    ap.add_argument("--boxes", action="store_true",
+                    help="pour: no calibration. Use the boxes from live_view.py (sense/live_boxes.json); "
+                         "box A is poured into unless --col, every column around it is watched for spills")
+    ap.add_argument("--new-boxes", action="store_true", help="with --boxes: draw new boxes first")
+    ap.add_argument("--no-record", action="store_true",
+                    help="pour: do not save the camera frames (saved by default to sense/seg_data/frames/pour_*)")
+    ap.add_argument("--record-fps", type=float, default=10.0, help="pour: camera frames saved per second")
+    ap.add_argument("--review-cam", default=None,
+                    help="pour: also film this camera (e.g. 1) next to the side camera in review.mp4")
+    ap.add_argument("--scene-model", default=str(SENSE_DIR / "scene_seg.onnx"))
+    ap.add_argument("--seg-model", default=str(SENSE_DIR / "level_seg.onnx"))
     a = ap.parse_args()
 
     if a.command == "home":
@@ -770,49 +934,127 @@ def main() -> int:
             joint.close()
             print("motor 6 released")
 
-    # not calibrated -> return before touching the camera or the arm
-    problems = check_calibration(a.calib, col)
-    if problems:
-        print("NOT CALIBRATED: " + "; ".join(problems))
-        print("run first:  python -m laminar.pour_motor6 calibrate")
-        return 1
-
     from cameras import LatestFrame, open_camera
-    from level import LevelTracker, load_columns
 
-    cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
-    tracker = LevelTracker(cam, load_columns(a.calib))
-    frame, _ = cam.read()
-    t_wait = time.time() + 3
-    while frame is None and time.time() < t_wait:
-        time.sleep(0.05)
+    if a.boxes:
+        # no calibration: you draw the box(es), the crop model reads them and the columns around them live
+        if not Path(a.seg_model).exists():
+            print(f"NOT TRAINED: {Path(a.seg_model).name} missing. In sense/: train_seg.py")
+            return 1
+        import live_view
+        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
+        time.sleep(0.5)
+        boxes = live_view.get_boxes(cam, a.new_boxes)
+        if not boxes:
+            print("cancelled")
+            cam.stop()
+            return 0
+        tracker, names, targets = live_view.build(cam, boxes, a.seg_model, a.capacity_ml, live_view.cam_width(cam))
+        if col not in targets:
+            print(f"no box {col}: you drew {', '.join(targets)} (pick one with --col)")
+            tracker.stop()
+            cam.stop()
+            return 1
+        time.sleep(1.5)
+        # the fill rate needs >= 4 readings in 0.3 s; fewer and the pour sees no flow and keeps tilting
+        with tracker._lock:
+            ts = [smp.ts for smp in tracker._hist[col]]
+        hz = sum(1 for t in ts if ts and t > ts[-1] - 1.0)
+        print(f"camera readings: {hz}/s for {len(names)} boxes")
+        if hz < MIN_READ_HZ:
+            print(f"NOT STARTED: only {hz} level readings a second (need {MIN_READ_HZ}). The computer is too busy: "
+                  "stop training / other heavy programs, and draw only the target box (fewer columns to read)")
+            tracker.stop()
+            cam.stop()
+            return 1
+        # neighbours may already hold spill from earlier pours: they must not RISE from their level now
+        empty = []
+        pour_calib = None
+        print(f"pouring into {col}; watching {', '.join(n for n in names if n != col)} for liquid going astray")
+    elif a.auto:
+        # no calibration: the scene model finds the columns, the crop model reads them live
+        missing = [p for p in (a.scene_model, a.seg_model) if not Path(p).exists()]
+        if missing:
+            print("NOT TRAINED: " + ", ".join(Path(p).name for p in missing) + " missing. In sense/: record_frames.py, "
+                  "label_scene.py, train_scene.py, train_seg.py")
+            return 1
+        from scene_level import SceneModel, confirm_columns
+        from seg_level import SegLevelTracker
+        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
+        time.sleep(0.5)
+        columns, col = confirm_columns(cam, SceneModel(a.scene_model), a.capacity_ml, target=a.col)
+        if columns is None:
+            print("cancelled")
+            cam.stop()
+            return 0
+        tracker = SegLevelTracker(cam, columns, a.seg_model)
+        tracker.start()
+        empty = [k for k in columns if k != col]           # every other column must not rise
+        pour_calib = None
+        print(f"{len(columns)} columns found ({', '.join(columns)}), pouring into {col}")
+    else:
+        # not calibrated -> return before touching the camera or the arm
+        problems = check_calibration(a.calib, col)
+        if problems:
+            print("NOT CALIBRATED: " + "; ".join(problems))
+            print("run first:  python -m laminar.pour_motor6 calibrate   (or use --auto)")
+            return 1
+        from level import LevelTracker, load_columns
+        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
+        tracker = LevelTracker(cam, load_columns(a.calib))
         frame, _ = cam.read()
-    tracker.ref = _load_reference(a.calib, frame.shape if frame is not None else None)
-    if tracker.ref is None:
-        print("NOT CALIBRATED: the empty reference image does not match this camera. Run: calibrate")
-        cam.stop()
-        return 1
-    tracker.start()
+        t_wait = time.time() + 3
+        while frame is None and time.time() < t_wait:
+            time.sleep(0.05)
+            frame, _ = cam.read()
+        tracker.ref = _load_reference(a.calib, frame.shape if frame is not None else None)
+        if tracker.ref is None:
+            print("NOT CALIBRATED: the empty reference image does not match this camera. Run: calibrate")
+            cam.stop()
+            return 1
+        tracker.start()
+        empty = json.loads(Path(a.calib).read_text()).get("empty", [])
+        pour_calib = a.calib
 
+    cam2 = None
+    if a.review_cam is not None and not a.no_record:
+        try:
+            cam2 = LatestFrame(open_camera(int(a.review_cam) if a.review_cam.isdigit() else a.review_cam)).start()
+        except Exception as e:
+            print(f"review camera {a.review_cam} did not open ({e}): recording without it")
+    rec = None if a.no_record else CamRecorder(cam, fps=a.record_fps, tracker=tracker, cam2=cam2)
+    info = {"argv": sys.argv[1:], "column": col, "side": a.side, "target": a.target,
+            "boxes": {k: list(c.roi) for k, c in tracker.columns.items()}}
     backend = a.backend or "server"
     try:
         joint = _open_joint(backend)
     except Exception as e:
         print(f"could not start motor 6 ({backend}): {e}")
         tracker.stop()
+        if rec:
+            rec.stop({**info, "result": f"motor 6 did not start: {e}"})
         cam.stop()
         return 1
     view = None
     try:
-        if not a.yes and input(f"pour {a.side} into column {col}. Vial in the gripper, spout over {col}, "
-                               "area clear? [y/N] ").lower() != "y":
+        if not a.yes and not ask_yes(f"pour {a.side} into column {col}. Vial in the gripper, spout over {col}, "
+                                     "area clear?"):
+            print("cancelled, nothing moved")
             return 0
-        empty = json.loads(Path(a.calib).read_text()).get("empty", [])
         view = None if a.no_view else PourView(cam, tracker, col, empty)
+
+        def on_tick(r):
+            if rec:
+                rec.status = r          # the review video shows the pour's numbers
+            if view:
+                view(r)
         if view:
             print("camera window open: press q in it to stop the pour")
-        r = fn(joint, tracker, col, calib_path=a.calib,
-               cfg=PourConfig(target_frac=a.target, max_tilt_deg=a.max_tilt), log_path=a.log, on_tick=view)
+        if rec:
+            info["pour_start_time"] = time.time()
+        r = fn(joint, tracker, col, calib_path=pour_calib, empty=empty,
+               cfg=PourConfig(target_frac=a.target, max_tilt_deg=a.max_tilt), log_path=a.log, on_tick=on_tick)
+        info["result"] = {k: v for k, v in r.__dict__.items() if k != "guide"}
         if r.result == "not_started":
             print(f"NOT STARTED: {r.reason}")
         print("pour:", json.dumps({k: v for k, v in r.__dict__.items() if k not in ("log", "guide")}, indent=2))
@@ -822,6 +1064,10 @@ def main() -> int:
         if view:
             view.close()
         tracker.stop()
+        if rec:
+            rec.stop(info)
+        if cam2:
+            cam2.stop()
         cam.stop()
         print("motor 6 released, camera closed")
 

@@ -1,0 +1,10 @@
+{
+  "in_h": 128,
+  "in_w": 32,
+  "held_back_error_px": 2.57,
+  "held_back_error_of_box": 0.0246,
+  "p95_error_of_box": 0.0851,
+  "train_crops": 14400,
+  "held_back_crops": 1008,
+  "trained": "2026-10-24 04:48:27"
+}
