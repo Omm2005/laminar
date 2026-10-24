@@ -35,6 +35,10 @@ The model, `live_view.py` and recording work the same everywhere. What changes:
 | start arm_server | `python mac_run.py arm_server.py` (macOS USB fixes) | `python arm_server.py` (the CAN driver was written on Windows) | `python arm_server.py`, untested; the USB-CAN adapter needs a udev rule or `sudo` |
 
 With the venv activated, plain `python` works on all three (`python live_view.py ...`).
+
+Tested so far: **macOS only** (M-series, Python 3.13). Windows: camera, model and pour code should work as is,
+and the arm driver was first written on Windows. Linux: the camera and model should work; the arm (USB-CAN)
+has not been tried. If something breaks on your machine, add the fix here.
 If `review.mp4` will not play on Windows/Linux, open it in VLC (it falls back to the mp4v codec there).
 
 ## 2. Test the model (camera only, no arm)
