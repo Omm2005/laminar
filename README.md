@@ -8,4 +8,3 @@ Cal Hacks build: one reBot arm picks a vial, carries it without slosh, and pours
 | robotics/ | Avery |
 | sense/ | Amogh |
 | software/ | Om |
-| teleop/ | Amogh |
