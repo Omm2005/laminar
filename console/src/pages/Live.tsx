@@ -6,14 +6,114 @@ import {
 import { api } from "../../convex/_generated/api";
 import Arm3D, { type Telem } from "../robot/Arm3D";
 
+const BUFFER_LEN = 20;
+const STALE_MS = 2000;
 const JOINT_LIMITS: [number, number][] = [
   [-145, 145], [0, 170], [0, 180], [-80, 90], [-90, 90], [-90, 90],
 ];
-const BUFFER_LEN = 20; // 20 samples at 10 Hz = 2 s
+
+/* ----------------------------------------------------------- plain words */
+
+function vialLetter(n: number): string {
+  return String.fromCharCode(64 + Math.max(1, Math.min(26, n))); // 1 -> A
+}
+function jobLine(job?: { targetMl: number; channel: number; vial: number } | null): string {
+  if (!job || job.targetMl <= 0) return "No job";
+  return `Pour ${job.targetMl.toFixed(1)} mL into channel ${job.channel} from vial ${vialLetter(job.vial)}`;
+}
+function stepInWords(
+  status: string,
+  stepName: string | null | undefined,
+  job: { channel: number; vial: number; targetMl: number } | null,
+  poured: number | null,
+): string {
+  if (status === "awaiting_approval") return "Waiting for approval";
+  if (status === "planning")  return "Planning the pour";
+  if (status === "queued")    return "In the queue";
+  if (status === "approved")  return "Ready to run";
+  if (status === "done")      return "Done";
+  if (status === "failed")    return "Failed";
+  if (status === "stalled")   return "Stalled";
+  if (status === "estop")     return "Stopped";
+  if (!job) return "Idle";
+  const V = vialLetter(job.vial);
+  const C = job.channel;
+  switch (stepName) {
+    case "grasp":         return `Grasping vial ${V}`;
+    case "lift":          return "Lifting";
+    case "traverse":      return `Moving over channel ${C}`;
+    case "lower":         return `Lowering over channel ${C}`;
+    case "adaptive_pour": return poured == null
+      ? `Starting the pour into channel ${C}`
+      : `Pouring ${poured.toFixed(1)} / ${job.targetMl.toFixed(1)} mL`;
+    case "untilt":        return "Returning to upright";
+    case "return_vial":   return `Carrying vial ${V} back`;
+    case "home":          return "Returning home";
+    default:              return status === "running" ? "Running" : "Standing by";
+  }
+}
+
+function statusLabel(status: string): string {
+  if (status === "awaiting_approval") return "Awaiting approval";
+  if (status === "idle") return "Idle";
+  if (status === "estop") return "Stopped";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function fmtAgo(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms ago`;
+  if (ms < 60_000) return `${Math.round(ms / 1000)} s ago`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return s === 0 ? `${m} m ago` : `${m} m ${s} s ago`;
+}
+
+function eventPhrase(e: { kind: string; source: string; message: string }): string {
+  // Rewrite the raw message into plain words; fall back to a lightly cleaned version.
+  const m = e.message;
+  const src = e.source === "web" ? "the console"
+            : e.source === "bench" ? "the bench"
+            : e.source === "robot" ? "the robot"
+            : e.source === "planner" ? "the planner"
+            : e.source === "watchdog" ? "the watchdog"
+            : e.source;
+
+  if (m.startsWith("status -> ")) {
+    const rest = m.slice("status -> ".length).replace(/_/g, " ");
+    return `${capitalize(rest)}`;
+  }
+  if (m.startsWith("job submitted: ")) {
+    return `Job submitted: ${m.slice("job submitted: ".length)}`;
+  }
+  if (m.startsWith("plan ready: ")) {
+    return `Plan ready — ${m.slice("plan ready: ".length)}`;
+  }
+  if (m.startsWith("job approved")) {
+    return m.replace(/^job approved/, "Approved");
+  }
+  if (m.startsWith("job rejected")) {
+    return m.replace(/^job rejected/, "Rejected");
+  }
+  if (m.includes("stop cleared")) {
+    return `Stop cleared by ${src}`;
+  }
+  if (e.kind === "estop") {
+    return `Stop requested by ${src}`;
+  }
+  if (m.startsWith("robot client picked up job")) {
+    return "The robot picked up the job";
+  }
+  return capitalize(m.replace(/_/g, " "));
+}
+function capitalize(s: string): string {
+  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/* ----------------------------------------------------------- page */
 
 export default function Live() {
   const jobs = useQuery(api.jobs.list, { limit: 1 });
-  const activeJob = jobs?.[0];
+  const activeJob = jobs?.[0] ?? null;
   const telem = useQuery(api.robot.latestTelemetry, {});
   const levels = useQuery(
     api.robot.levelsForJob,
@@ -24,41 +124,44 @@ export default function Live() {
     activeJob ? { jobId: activeJob._id, limit: 400 } : "skip",
   );
   const stopState = useQuery(api.control.stopRequested, {});
-  const nodes = useQuery(api.bench.nodes, {});
   const events = useQuery(api.events.recent, { limit: 20 });
   const estop = useMutation(api.control.estop);
   const clearStop = useMutation(api.control.clearStop);
   const approve = useMutation(api.jobs.approve);
-  const reject = useMutation(api.jobs.reject);
 
-  // ring buffer of telemetry samples for the 3D view + sparklines
+  // telemetry ring buffer for the 3D arm
   const buf = useRef<Telem[]>([]);
-  const [bufTick, setBufTick] = useState(0);
+  const [, setBufTick] = useState(0);
   useEffect(() => {
     if (!telem?.joints) return;
-    const sample: Telem = { t: telem.t, joints: telem.joints, commanded: telem.commanded };
     const b = buf.current;
-    // dedupe on timestamp
-    if (b.length === 0 || b[b.length - 1].t !== sample.t) {
-      b.push(sample);
+    if (b.length === 0 || b[b.length - 1].t !== telem.t) {
+      b.push({ t: telem.t, joints: telem.joints, commanded: telem.commanded });
       if (b.length > BUFFER_LEN) b.shift();
       setBufTick((n) => n + 1);
     }
   }, [telem?.t]);
 
-  // top-bar latency: now - newest telemetry.t in ms
-  const [latency, setLatency] = useState<number | null>(null);
+  // staleness tick (every 500 ms is enough)
+  const [, setNowTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => {
-      if (telem?.t) setLatency(Date.now() - telem.t);
-      else setLatency(null);
-    }, 150);
+    const id = setInterval(() => setNowTick((n) => n + 1), 500);
     return () => clearInterval(id);
-  }, [telem?.t]);
+  }, []);
+  const now = Date.now();
+  const lastT = telem?.t ?? 0;
+  const sinceMs = lastT ? now - lastT : Infinity;
+  const stale = sinceMs > STALE_MS;
 
   const status = activeJob?.status ?? "idle";
-  const joints = telem?.joints ?? Array(6).fill(0);
+  const stopped = !!stopState?.stop;
 
+  // poured so far during the active job (latest level - first level sample)
+  const poured = levels && levels.length >= 1
+    ? Math.max(0, (levels[levels.length - 1].ml) - (levels[0].ml))
+    : null;
+
+  // chart data: merge level + scale by time
   const t0 = levels?.[0]?.t ?? scale?.[0]?.t ?? 0;
   type Point = { t: number; ml?: number; grams?: number };
   const byT = new Map<number, Point>();
@@ -77,173 +180,278 @@ export default function Live() {
   const chartData = Array.from(byT.values()).sort((a, b) => a.t - b.t);
 
   const [cameraPreset, setCameraPreset] = useState<"front" | "top" | "shoulder">("front");
+  const [showJoints, setShowJoints] = useState(false);
+
+  const target = activeJob?.targetMl ?? 0;
+  const progress = target > 0 && poured != null ? Math.min(1, poured / target) : 0;
 
   return (
     <>
-      {/* top bar */}
-      <section className="surface topbar">
-        <StatusPill status={status} />
-        <div className="step">
-          <span className="dim">step</span>{" "}
-          <span className="mono">{activeJob?.currentStep ?? "—"}</span>
+      {/* STATUS BAR */}
+      <section className="status-bar">
+        <div className="sb-left">
+          <div className="sb-pill" data-status={status}>{statusLabel(status)}</div>
+          <div className="sb-job">{jobLine(activeJob)}</div>
         </div>
-        <LatencyBadge ms={latency} />
+        <div className="sb-center">{stepInWords(status, activeJob?.currentStep, activeJob, poured)}</div>
+        <div className="sb-right">
+          {activeJob?.status === "awaiting_approval" && (
+            <button className="btn-primary"
+                    onClick={() => approve({ jobId: activeJob._id, approvedBy: "hema" })}>
+              Approve
+            </button>
+          )}
+          {stopped ? (
+            <button className="btn-stop-mini" onClick={() => clearStop({ source: "web" })}>Clear stop</button>
+          ) : (
+            <button className="btn-stop-mini" onClick={() => estop({ source: "web", message: "manual" })}>Stop</button>
+          )}
+          <LiveBadge stale={stale} sinceMs={sinceMs} />
+        </div>
       </section>
 
-      {/* main: 3D arm full width (desktop keeps 3D on left, column on right) */}
+      {/* MAIN GRID */}
       <div className="live-grid">
-        <section className="surface arm-pane">
-          <Arm3D
-            samples={buf.current.slice()}
-            status={status}
-            gripperDeg={0}
-            pourChannel={activeJob?.channel ?? null}
-            cameraPreset={cameraPreset}
-          />
-          <div className="arm-controls">
+        {/* ROBOT (hero, 60%) */}
+        <section className="robot-pane">
+          <div className={`robot-canvas ${stale ? "robot-stale" : ""}`}>
+            <Arm3D
+              samples={buf.current.slice()}
+              status={status}
+              gripperDeg={0}
+              pourChannel={activeJob?.channel ?? null}
+              cameraPreset={cameraPreset}
+            />
+          </div>
+          {stale && (
+            <div className="stale-overlay">
+              <div className="stale-head">No live data</div>
+              <div className="stale-sub">
+                last seen {lastT ? fmtAgo(sinceMs) : "never"} · start the bench
+              </div>
+              <div className="stale-hint mono">
+                powershell -ExecutionPolicy Bypass -File console\bridge\start_bench.ps1
+              </div>
+            </div>
+          )}
+          <div className="cam-chips">
             {(["front", "top", "shoulder"] as const).map((k) => (
-              <button key={k}
-                className={cameraPreset === k ? "chip chip-on" : "chip"}
-                onClick={() => setCameraPreset(k)}>
-                {k}
-              </button>
+              <button key={k} className={cameraPreset === k ? "chip chip-on" : "chip"}
+                      onClick={() => setCameraPreset(k)}>{k}</button>
             ))}
           </div>
+          <button className="details-toggle" onClick={() => setShowJoints((v) => !v)}>
+            {showJoints ? "Hide details" : "Details"}
+          </button>
         </section>
 
-        <aside className="live-side">
-          <StopPanel stopped={!!stopState?.stop}
-                     onStop={() => estop({ source: "web", message: "manual" })}
-                     onClear={() => clearStop({ source: "web" })} />
-
-          <BigPoured poured={0} target={activeJob?.targetMl ?? 0} />
-
-          <section className="surface">
-            <div className="section-title">pour (mL · g vs s)</div>
-            {activeJob && chartData.length > 1 ? (
-              <ResponsiveContainer width="100%" height={180}>
-                <LineChart data={chartData}>
-                  <CartesianGrid stroke="#1f2531" vertical={false} />
-                  <XAxis dataKey="t" stroke="#7d869c" tick={{ fontSize: 10 }} />
-                  <YAxis yAxisId="ml" stroke="#7dd3fc" tick={{ fontSize: 10 }} width={28} />
-                  <YAxis yAxisId="g" orientation="right" stroke="#e8c257" tick={{ fontSize: 10 }} width={28} />
-                  <Tooltip contentStyle={{ background: "#141821", border: "1px solid #262c3b", fontSize: 11 }} />
-                  <ReferenceLine yAxisId="ml" y={activeJob.targetMl} stroke="#7dd3fc"
-                    strokeDasharray="4 4" />
-                  <Line yAxisId="ml" type="monotone" dataKey="ml" stroke="#7dd3fc" dot={false} strokeWidth={2}
-                    connectNulls isAnimationActive={false} />
-                  <Line yAxisId="g" type="monotone" dataKey="grams" stroke="#e8c257" dot={false} strokeWidth={2}
-                    connectNulls isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <EmptyWhy>will populate when a pour is running (adaptive_pour pushes level samples at 5 Hz)</EmptyWhy>
-            )}
-          </section>
-
-          <Approve activeJob={activeJob}
-                   onApprove={(name) => activeJob && approve({ jobId: activeJob._id, approvedBy: name })}
-                   onReject={(name) => activeJob && reject({ jobId: activeJob._id, approvedBy: name })} />
-
-          <section className="surface">
-            <div className="section-title">joints (°)</div>
-            <Gauges joints={joints} history={buf.current} key={bufTick} />
-          </section>
-
-          <BenchNodes nodes={nodes} />
+        {/* RIGHT COLUMN: Pour · Bench · Activity */}
+        <aside className="right-col">
+          <PourBlock target={target} poured={poured} progress={progress}
+                     chartData={chartData} active={!!activeJob} />
+          <BenchBlock activeChannel={activeJob?.channel ?? null}
+                      poured={poured} target={target} activeVial={activeJob?.vial ?? null} />
+          <ActivityBlock events={events ?? []} />
         </aside>
       </div>
 
-      <section className="surface">
-        <div className="section-title">events</div>
-        <EventFeed events={events ?? []} />
-      </section>
+      {/* joints hidden behind Details drawer */}
+      {showJoints && (
+        <JointsDrawer joints={telem?.joints ?? Array(6).fill(0)}
+                      commanded={telem?.commanded ?? null}
+                      history={buf.current} />
+      )}
     </>
   );
 }
 
-/* ------------------------------- top bar ------------------------------- */
+/* ----------------------------------------------------------- top bar */
 
-function StatusPill({ status }: { status: string }) {
-  return <span className={`pill ${status}`}>{status.replace("_", " ")}</span>;
-}
-function LatencyBadge({ ms }: { ms: number | null }) {
-  if (ms == null) return <span className="pill">no telemetry</span>;
-  const cls = ms < 300 ? "ok" : ms < 800 ? "warn" : "bad";
-  return <span className={`latency ${cls}`}>{Math.round(ms)} ms</span>;
+function LiveBadge({ stale, sinceMs }: { stale: boolean; sinceMs: number }) {
+  if (stale) return null;
+  return <span className="live-pill">LIVE · {Math.round(sinceMs)} ms</span>;
 }
 
-/* ------------------------------- side column ------------------------------- */
+/* ----------------------------------------------------------- Pour block */
 
-function StopPanel({ stopped, onStop, onClear }: { stopped: boolean; onStop: () => void; onClear: () => void }) {
+function PourBlock({
+  target, poured, progress, chartData, active,
+}: {
+  target: number; poured: number | null; progress: number;
+  chartData: { t: number; ml?: number; grams?: number }[];
+  active: boolean;
+}) {
   return (
-    <section className="surface">
-      {stopped ? (
-        <button className="btn-stop btn-stop-clear" onClick={onClear}>CLEAR STOP</button>
+    <section className="card">
+      <div className="card-title">Pour</div>
+      <div className="pour-head">
+        <ProgressRing progress={progress} />
+        <div className="pour-num">
+          <div className="n">{(poured ?? 0).toFixed(1)}</div>
+          <div className="d">of {target.toFixed(1)} mL</div>
+        </div>
+      </div>
+      {active && chartData.length > 1 ? (
+        <ResponsiveContainer width="100%" height={160}>
+          <LineChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+            <CartesianGrid stroke="#1f2531" vertical={false} />
+            <XAxis dataKey="t" stroke="#7d869c" tick={{ fontSize: 10 }} />
+            <YAxis stroke="#7d869c" tick={{ fontSize: 10 }} width={28} />
+            <Tooltip contentStyle={{ background: "#141821", border: "1px solid #262c3b", fontSize: 11 }} />
+            <ReferenceLine y={target} stroke="#7dd3fc" strokeDasharray="4 4" />
+            <Line type="monotone" dataKey="ml" stroke="#7dd3fc" dot={false} strokeWidth={2}
+                  connectNulls isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
       ) : (
-        <button className="btn-stop" onClick={onStop}>STOP</button>
+        <div className="empty-text">Chart starts when the pour starts.</div>
       )}
     </section>
   );
 }
 
-function BigPoured({ poured, target }: { poured: number; target: number }) {
+function ProgressRing({ progress }: { progress: number }) {
+  const r = 32;
+  const circ = 2 * Math.PI * r;
+  const off = circ * (1 - Math.max(0, Math.min(1, progress)));
   return (
-    <section className="surface big">
-      <div className="dim small">POURED</div>
-      <div className="big-num">
-        {poured.toFixed(2)}
-        <span className="dim medium"> / {target.toFixed(2)} mL</span>
-      </div>
-    </section>
+    <svg width={80} height={80} viewBox="0 0 80 80" className="ring">
+      <circle cx={40} cy={40} r={r} fill="none" stroke="#1f2531" strokeWidth={6} />
+      <circle cx={40} cy={40} r={r} fill="none" stroke="var(--accent)" strokeWidth={6}
+              strokeDasharray={circ} strokeDashoffset={off}
+              transform="rotate(-90 40 40)" strokeLinecap="round" />
+    </svg>
   );
 }
 
-function Approve({ activeJob, onApprove, onReject }: {
-  activeJob?: { _id: string; status: string; requestText: string };
-  onApprove: (name: string) => void;
-  onReject: (name: string) => void;
+/* ----------------------------------------------------------- Bench block */
+
+function BenchBlock({ activeChannel, poured, target, activeVial }: {
+  activeChannel: number | null; poured: number | null; target: number; activeVial: number | null;
 }) {
-  const [name, setName] = useState("hema");
-  if (!activeJob || activeJob.status !== "awaiting_approval") return null;
+  // placeholder bench state until the BENCH schema lands: 4 vials, 12 channels at 0 mL.
+  const vials = [1, 2, 3, 4];
+  const channels = Array.from({ length: 12 }, (_, i) => i + 1);
+  const CAPACITY = 10;
   return (
-    <section className="surface approve">
-      <div className="section-title">awaiting approval</div>
-      <div className="mono dim small">{activeJob.requestText}</div>
-      <div className="row" style={{ gap: 8, marginTop: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)}
-               style={{ maxWidth: 120 }} />
-        <button className="btn-primary" onClick={() => onApprove(name)}>Approve</button>
-        <button className="btn-ghost" onClick={() => onReject(name)}>Reject</button>
+    <section className="card">
+      <div className="card-title">Bench</div>
+      <div className="bench-vials">
+        {vials.map((v) => (
+          <div key={v} className={`vial ${activeVial === v ? "vial-active" : ""}`}>
+            <div className="vial-id">{vialLetter(v)}</div>
+            <div className="vial-sub">—</div>
+          </div>
+        ))}
+      </div>
+      <svg viewBox="0 0 480 100" className="reservoir" preserveAspectRatio="xMidYMid meet">
+        {channels.map((c, i) => {
+          const x = 20 + i * 36;
+          const isActive = activeChannel === c;
+          const fillMl = isActive && poured != null ? Math.min(CAPACITY, poured) : 0;
+          const targetMl = isActive ? target : 0;
+          const h = 70;
+          const fillH = (fillMl / CAPACITY) * h;
+          const targetY = h - (targetMl / CAPACITY) * h;
+          return (
+            <g key={c}>
+              <rect x={x} y={20} width={28} height={h} rx={3}
+                    fill="#1b2130" stroke={isActive ? "var(--accent)" : "#262c3b"} />
+              {fillH > 0 && (
+                <rect x={x} y={20 + h - fillH} width={28} height={fillH} rx={3}
+                      fill="var(--accent)" opacity={0.7} />
+              )}
+              {isActive && target > 0 && (
+                <line x1={x - 2} x2={x + 30} y1={20 + targetY} y2={20 + targetY}
+                      stroke="#e8c257" strokeWidth={1.5} strokeDasharray="3 2" />
+              )}
+              <text x={x + 14} y={14} textAnchor="middle" fontSize="10" fill="#7d869c">{c}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="bench-hint small dim">
+        {activeChannel
+          ? `Channel ${activeChannel} is active · target ${target.toFixed(1)} mL`
+          : "Awaiting a job"}
       </div>
     </section>
   );
 }
 
-const Gauges = memo(function Gauges({ joints, history }: { joints: number[]; history: Telem[] }) {
+/* ----------------------------------------------------------- Activity block */
+
+function ActivityBlock({ events }: { events: { _id: string; t: number; kind: string; source: string; message: string }[] }) {
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const atTop = useRef(true);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    if (atTop.current) el.scrollTop = 0;
+  }, [events]);
+  function onScroll() {
+    const el = listRef.current;
+    if (!el) return;
+    atTop.current = el.scrollTop < 10;
+  }
+  const now = Date.now();
   return (
-    <div className="gauges">
-      {joints.slice(0, 6).map((v, i) => {
-        const [lo, hi] = JOINT_LIMITS[i];
-        const span = hi - lo || 1;
-        const pct = ((v - lo) / span) * 100;
-        return (
-          <div className="gauge" key={i}>
-            <div className="g-head">
-              <span className="dim small">J{i + 1}</span>
-              <span className="g-val">{v.toFixed(1)}</span>
+    <section className="card">
+      <div className="card-title">Activity</div>
+      {events.length === 0 ? (
+        <div className="empty-text">
+          Events will show up here as the planner, the robot and the bench do things.
+        </div>
+      ) : (
+        <ul className="activity" ref={listRef} onScroll={onScroll}>
+          {events.map((e) => (
+            <li key={e._id}>
+              <span className={`dot ${e.kind === "error" ? "bad" : e.kind === "warn" ? "warn" : "ok"}`} />
+              <span>{eventPhrase(e)}</span>
+              <span className="dim small ml-auto num">{fmtAgo(now - e.t)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------- Details drawer */
+
+const JointsDrawer = memo(function JointsDrawer({
+  joints, commanded, history,
+}: { joints: number[]; commanded: number[] | null; history: Telem[] }) {
+  return (
+    <section className="card">
+      <div className="card-title">Joint details</div>
+      <div className="joints-grid">
+        {joints.slice(0, 6).map((v, i) => {
+          const [lo, hi] = JOINT_LIMITS[i];
+          const span = hi - lo || 1;
+          const pct = ((v - lo) / span) * 100;
+          const cmd = commanded?.[i];
+          return (
+            <div className="joint" key={i}>
+              <div className="j-head">
+                <span className="dim small">Joint {i + 1}</span>
+                <span className="j-val num">{v.toFixed(1)}°</span>
+              </div>
+              {cmd != null && (
+                <div className="j-sub small dim num">target {cmd.toFixed(1)}°</div>
+              )}
+              <Spark values={history.map((s) => s.joints[i] ?? 0)} min={lo} max={hi} />
+              <div className="j-bar"><div style={{ left: `${pct}%` }} /></div>
             </div>
-            <Spark values={history.map((s) => s.joints[i] ?? 0)} min={lo} max={hi} />
-            <div className="g-bar"><div style={{ left: `${pct}%` }} /></div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    </section>
   );
 });
 
 function Spark({ values, min, max }: { values: number[]; min: number; max: number }) {
-  const w = 60, h = 18;
+  const w = 80, h = 18;
   if (values.length < 2) return <svg width={w} height={h} />;
   const span = max - min || 1;
   const pts = values.map((v, i) => {
@@ -256,55 +464,4 @@ function Spark({ values, min, max }: { values: number[]; min: number; max: numbe
       <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
     </svg>
   );
-}
-
-function BenchNodes({ nodes }: { nodes?: { _id: string; name: string; lastHeartbeat: number; lastButton?: string; online?: boolean }[] }) {
-  const latestScale = useQuery(api.scale.latest, {});
-  if (!nodes) return null;
-  if (nodes.length === 0) return null;
-  return (
-    <section className="surface">
-      <div className="section-title">bench</div>
-      <ul className="bench-list">
-        {nodes.map((n) => {
-          const age = (Date.now() - n.lastHeartbeat) / 1000;
-          return (
-            <li key={n._id}>
-              <span className={`dot ${n.online ? "ok" : "bad"}`} />
-              <div className="col-grow">
-                <div className="mono">{n.name}</div>
-                <div className="small dim mono">
-                  hb {age < 60 ? `${age.toFixed(0)}s` : `${(age / 60).toFixed(0)}m`}
-                  {" · btn "}{n.lastButton ?? "—"}
-                  {" · "}{latestScale ? `${latestScale.grams.toFixed(1)} g` : "— g"}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
-}
-
-function EventFeed({ events }: { events: { _id: string; t: number; kind: string; source: string; message: string }[] }) {
-  if (events.length === 0) return <EmptyWhy>planner, approvals, robot steps, and e-stops appear here</EmptyWhy>;
-  return (
-    <ul className="event-feed">
-      {events.map((e) => (
-        <li key={e._id}>
-          <span className={`dot ${e.kind === "error" ? "bad" : e.kind === "warn" ? "warn" : "ok"}`} />
-          <span className="mono small dim" style={{ minWidth: 60 }}>
-            {new Date(e.t).toLocaleTimeString()}
-          </span>
-          <span className="small dim" style={{ minWidth: 80 }}>{e.source}</span>
-          <span className="small">{e.message}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function EmptyWhy({ children }: { children: React.ReactNode }) {
-  return <div className="empty-why small dim">{children}</div>;
 }
