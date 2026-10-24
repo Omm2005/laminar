@@ -25,6 +25,7 @@ import csv
 import json
 import math
 import sys
+import time
 from pathlib import Path as FilePath
 
 import numpy as np
@@ -35,6 +36,7 @@ from arm_client import ArmClient
 HERE = FilePath(__file__).resolve().parent
 RECORDINGS = HERE / "recordings"
 LIFT_MM = 100.0
+MIN_LOWER_MM = 60.0   # the carry runs at least this far above B, so the last move is always a real lower
 REPLAY_MAX_DEG_S = 80.0  # arm_server refuses path steps over 90 deg/s
 IDLE_DEG = 0.5           # leading frames within this of frame 0 are skipped
 
@@ -78,7 +80,8 @@ def mark(rec: FilePath, name: str) -> None:
 
 
 def plan_a_to_b(ep: dict) -> list[M.Path]:
-    """lift LIFT_MM at A -> flat travel to above B -> lower to B's height."""
+    """lift at A -> flat travel to above B -> lower to B's height. The lift is LIFT_MM, or more when B sits higher
+    than A, so the carry plane is always at least MIN_LOWER_MM above B."""
     qa, qb = arm(ep["A"]["command"]), arm(ep["B"]["command"])
     pa, Ra = M.fk_mm(qa)
     pb, Rb = M.fk_mm(qb)
@@ -86,9 +89,10 @@ def plan_a_to_b(ep: dict) -> list[M.Path]:
     yaw = math.atan2(Rd[1, 0] - Rd[0, 1], Rd[0, 0] + Rd[1, 1])
     c, s = math.cos(yaw), math.sin(yaw)
     R1 = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ Ra
-    lift = M.plan_lift(qa, LIFT_MM)
+    lift_mm = max(LIFT_MM, (pb[2] - pa[2]) + MIN_LOWER_MM)
+    lift = M.plan_lift(qa, lift_mm)
     travel = M.plan_travel(lift.final_joints, {"xy_mm": pb[:2].tolist(), "R": R1.tolist()}, label="travel A -> B")
-    lower = M.plan_lower(travel.final_joints, LIFT_MM - (pb[2] - pa[2]))
+    lower = M.plan_lower(travel.final_joints, lift_mm - (pb[2] - pa[2]))
     return [lift, travel, lower]
 
 
@@ -104,12 +108,21 @@ def recorded_segment(rec: FilePath, ep: dict, fps: float) -> tuple[list[dict[int
     return pts, hz
 
 
+def reverse_path(p: M.Path) -> M.Path:
+    """The same move played backwards: same joint targets in reverse order, same timing."""
+    return M.Path(times_s=list(p.times_s), joints=list(p.joints[::-1]), label=f"back: {p.label}",
+                  start_mm=p.end_mm, end_mm=p.start_mm, max_pos_err_mm=p.max_pos_err_mm,
+                  max_ang_err_deg=p.max_ang_err_deg)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["mark", "plan", "replay"])
     ap.add_argument("name", nargs="?", choices=["A", "B"], help="mark: which pose")
     ap.add_argument("--rec", default=None, help="recording folder (default: newest in recordings/)")
     ap.add_argument("--run", action="store_true", help="replay: move the arm (otherwise print only)")
+    ap.add_argument("--no-return", action="store_true",
+                    help="replay: stop at B (default: play everything back in reverse so the tube returns to A)")
     a = ap.parse_args()
     rec = FilePath(a.rec) if a.rec else latest_recording()
 
@@ -153,9 +166,23 @@ def main() -> None:
         for p in moves:
             st = client.run(p)
             print("  " + str(st.get("result")))
+        if a.no_return:
+            print("replay done: at B")
+            return
+        time.sleep(1.0)
+        # back the way it came: every planned move reversed along the same joint path (lift at B, travel back
+        # above A, lower onto A), then the recording played backwards, gripper included, so the jaws open at A
+        # (releasing the tube where it was taken from) before the arm retraces the teleop path to rest
+        for p in reversed(moves):
+            st = client.run(reverse_path(p))
+            print("  " + str(st.get("result")))
+        print("replaying A -> rest backwards (gripper releases first)")
+        st = client._send({"op": "path", "points": [{str(m): round(v, 3) for m, v in q.items()} for q in seg[::-1]],
+                           "hz": hz})
+        print("  " + str(st.get("result")))
     except (RuntimeError, TimeoutError) as e:
         sys.exit(f"STOPPED (arm is holding where it is): {e}")
-    print("replay done: at B")
+    print("replay done: tube back at A, arm back where the recording started")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,8 @@ GRIP_DAMPING = 1.5      # MIT kd
 GRIP_TORQUE_MOVING = 3.5
 GRIP_TORQUE_HOLDING = 1.0
 GRIP_HOLD_VEL = 0.25    # rad/s
+GRIP_STALL_S = 0.4      # jaws far from target but not moving for this long = closed on something: hold gently
+GRIP_NEAR_DEG = 3.0     # within this of the target counts as arrived (holding torque)
 STOP_FILE = HERE / "STOP"
 FEEDBACK_TIMEOUT = 0.25  # s without feedback from a follower motor -> stop
 LEADER_TIMEOUT = 0.5     # s without leader readings -> return to zero
@@ -56,6 +58,8 @@ def main():
     # 100 Hz keeps the candleLight adapter's TX queue well below saturation (7 commands per tick)
     ap.add_argument("--hz", type=float, default=100.0, help="control loop rate")
     ap.add_argument("--max-speed", type=float, default=180.0, help="follower joint speed limit while tracking, deg/s")
+    ap.add_argument("--keep-grip", action="store_true",
+                    help="on stop, return the arm to rest but leave the gripper where it is")
     ap.add_argument("--ramp-speed", type=float, default=20.0, help="speed when easing onto the leader / back to zero, deg/s")
     ap.add_argument("--duration", type=float, default=None, help="stop automatically after this many seconds")
     ap.add_argument("--max-start-mismatch", type=float, default=25.0,
@@ -83,6 +87,7 @@ def main():
     enabled = False
     cmd = {}  # follower targets, degrees relative to the follower zero pose
     regrip = {"t": 0.0}  # last time the gripper was re-enabled
+    grip_stall = {"since": 0.0, "target": 0.0}   # when the jaws last moved / got a new target
 
     def send_all():
         for mid in ids:
@@ -91,7 +96,16 @@ def main():
                 st = bus.state.get(mid)
                 tau = 0.0
                 if st:
-                    limit = GRIP_TORQUE_MOVING if abs(st["vel"]) > GRIP_HOLD_VEL else GRIP_TORQUE_HOLDING
+                    # Full torque to get the jaws moving and keep them moving; the gentle holding torque only
+                    # once they've arrived, or have been stalled away from the target for GRIP_STALL_S (closed
+                    # on a tube). Holding torque whenever the jaws were still made a deadlock: 1 N.m doesn't
+                    # break the jaws' static friction, so they never started moving and never got full torque.
+                    now_g = time.time()
+                    far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
+                    if abs(st["vel"]) > GRIP_HOLD_VEL or abs(cmd[mid] - grip_stall["target"]) > GRIP_NEAR_DEG:
+                        grip_stall.update(since=now_g, target=cmd[mid])   # moving, or a new target: not stalled
+                    stalled = now_g - grip_stall["since"] > GRIP_STALL_S
+                    limit = GRIP_TORQUE_MOVING if far and not stalled else GRIP_TORQUE_HOLDING
                     tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
                 bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
             else:
@@ -236,7 +250,11 @@ def main():
     finally:
         try:
             if enabled:
-                ease_to(lambda: dict.fromkeys(ids, 0.0), "Returning follower to zero pose")
+                rest = dict.fromkeys(ids, 0.0)
+                if args.keep_grip:   # arm to rest, jaws stay where they are (e.g. still holding a tube)
+                    rest[GRIPPER] = cmd[GRIPPER]
+                ease_to(lambda: rest, "Returning follower to zero pose"
+                        + (" (gripper kept at %.0f deg)" % cmd[GRIPPER] if args.keep_grip else ""))
                 t_end = time.time() + 0.3
                 while time.time() < t_end:
                     send_all()
