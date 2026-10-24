@@ -1,0 +1,4 @@
+pin
+numpy
+pyyaml
+pytest
