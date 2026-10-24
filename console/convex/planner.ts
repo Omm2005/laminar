@@ -39,6 +39,39 @@ function validate(plan: Plan): string | null {
   return null;
 }
 
+const FRACTIONS: Record<string, number> = { half: 0.5, quarter: 0.25, third: 1 / 3, all: 1 };
+
+function regexParse(text: string): Plan {
+  const t = text.trim();
+  const m1 = t.match(/pour\s+([\d.]+)\s*ml?\s+into\s+channel\s+(\d+)(?:\s+from\s+vial\s+(\d+))?/i);
+  const m2 = !m1 && t.match(/pour\s+(\w+)\s+of\s+channel\s+(\d+)(?:\s+from\s+vial\s+(\d+))?/i);
+  let targetMl: number, channel: number, vial: number;
+  if (m1) {
+    targetMl = Number(m1[1]); channel = Number(m1[2]); vial = Number(m1[3] ?? 1);
+  } else if (m2) {
+    const frac = FRACTIONS[m2[1].toLowerCase()];
+    if (!frac) throw new Error(`unknown fraction '${m2[1]}'`);
+    channel = Number(m2[2]); vial = Number(m2[3] ?? 1);
+    targetMl = frac * CHANNEL_CAPACITY_ML;
+  } else {
+    throw new Error(`could not parse '${t}'`);
+  }
+  return {
+    targetMl, channel, vial,
+    steps: [
+      { name: "grasp", args: { vial } },
+      { name: "lift", args: {} },
+      { name: "traverse", args: { channel } },
+      { name: "lower", args: {} },
+      { name: "adaptive_pour", args: { targetMl, channel } },
+      { name: "untilt", args: {} },
+      { name: "lift", args: {} },
+      { name: "return_vial", args: { vial } },
+      { name: "home", args: {} },
+    ],
+  };
+}
+
 const SYSTEM_PROMPT = `You are the planner for a lab pouring robot. The robot has a fixed primitive sequence it always runs:
   1. grasp vial N        pick up a vial by number
   2. lift                lift straight up a fixed distance
@@ -83,35 +116,34 @@ export const plan = internalAction({
     if (!job) return null;
 
     const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) {
-      await ctx.runMutation(internal.jobs.failInternal, {
-        jobId: args.jobId,
-        reason: "ANTHROPIC_API_KEY is not set in the Convex dashboard environment variables.",
-      });
-      return null;
-    }
-
     let plan: Plan;
     try {
-      const client = new Anthropic({ apiKey: key });
-      const msg = await client.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: job.requestText }],
-      });
-      const text = msg.content
-        .filter((b): b is Anthropic.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-        .trim();
-      // Strip accidental code fences if the model slipped them in.
-      const stripped = text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
-      plan = JSON.parse(stripped) as Plan;
+      if (key) {
+        const client = new Anthropic({ apiKey: key });
+        const msg = await client.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1024,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: "user", content: job.requestText }],
+        });
+        const text = msg.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("")
+          .trim();
+        const stripped = text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+        plan = JSON.parse(stripped) as Plan;
+      } else {
+        // Offline fallback: same regex grammar as pour/run_task.py so the console works
+        // end-to-end without a key. Dashboard shows event source="planner-fallback".
+        plan = regexParse(job.requestText);
+      }
     } catch (e) {
       await ctx.runMutation(internal.jobs.failInternal, {
         jobId: args.jobId,
-        reason: `planner model call failed: ${(e as Error).message}`,
+        reason: key
+          ? `planner model call failed: ${(e as Error).message}`
+          : `offline regex planner failed: ${(e as Error).message}`,
       });
       return null;
     }
