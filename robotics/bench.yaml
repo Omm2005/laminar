@@ -1,0 +1,47 @@
+# bench.yaml: hardware state for the bench. Only Robotics (Avery) writes this file; everyone reads it.
+# Units: joint angles in rad (as saved by the pose-save script), lengths in mm, volumes in mL.
+# EVERY VALUE BELOW IS A PLACEHOLDER until poses are taught and parts are measured.
+
+# Taught joint poses, joint1..joint6 (rad). Limits come from robotics/urdf/ReBot_Arm_RS.urdf.
+poses:
+  home:          [ 0.00, 0.30, 1.20, 0.00, 0.00, 0.00]
+  survey:        [ 0.00, 0.70, 1.60, 0.00, 0.80, 0.00]
+  rack_A_pre:    [-0.50, 0.90, 1.40, 0.00, 0.30, 0.00]
+  rack_A_grasp:  [-0.50, 1.10, 1.20, 0.00, 0.30, 0.00]
+  rack_B_pre:    [-0.30, 0.90, 1.40, 0.00, 0.30, 0.00]
+  rack_B_grasp:  [-0.30, 1.10, 1.20, 0.00, 0.30, 0.00]
+  rack_C_pre:    [-0.10, 0.90, 1.40, 0.00, 0.30, 0.00]
+  rack_C_grasp:  [-0.10, 1.10, 1.20, 0.00, 0.30, 0.00]
+  rack_D_pre:    [-0.50, 1.00, 1.20, 0.00, 0.30, 0.00]
+  rack_D_grasp:  [-0.50, 1.20, 1.00, 0.00, 0.30, 0.00]
+  rack_E_pre:    [-0.30, 1.00, 1.20, 0.00, 0.30, 0.00]
+  rack_E_grasp:  [-0.30, 1.20, 1.00, 0.00, 0.30, 0.00]
+  rack_F_pre:    [-0.10, 1.00, 1.20, 0.00, 0.30, 0.00]
+  rack_F_grasp:  [-0.10, 1.20, 1.00, 0.00, 0.30, 0.00]
+  station_pre:   [ 0.60, 0.90, 1.30, 0.00, 0.30, 0.00]
+  station_pour:  [ 0.60, 1.00, 1.20, 0.00, 0.30, 0.00]
+
+# Joint that tilts the vial during a pour (1-based, joint6 = wrist roll).
+pour_joint: 6
+
+# The pour station and the tube type it is supposed to hold.
+station:
+  target_id: tube1
+  tube_type: tube_13mm
+
+tubes:
+  tube_13mm: {bore_mm: 13, height_mm: 100, capacity_ml: 12}
+  tube_10mm: {bore_mm: 10, height_mm: 75, capacity_ml: 5}   # wrong-size tube for the staged failure
+
+# Side-cam level curve per tube type: ml = polyval(coeffs, px), highest power first.
+level_curve:
+  tube_13mm: [0.06, 0.0]
+  tube_10mm: [0.035, 0.0]
+
+vial_types:
+  vial_10ml: {od_mm: 16, height_mm: 60, grasp_height_mm: 35, lip_offset_mm: [0, 8, 60]}
+
+# Box the gripper may enter, arm base frame, mm.
+workspace_mm:
+  min: [-400, -400, 0]
+  max: [ 400,  400, 450]
