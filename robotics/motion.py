@@ -5,6 +5,8 @@ This module plans the three shared moves that every Laminar task uses:
     plan_lift(q, distance_mm)       straight UP from wherever the gripper is now
     plan_lower(q, distance_mm)      straight DOWN from wherever the gripper is now
     plan_travel(q, target)          straight line in the SAME horizontal plane to a taught spot
+    plan_shift(q, (dx, dy))         same plane, pure translation by a 2-D offset (height + orientation locked)
+    plan_transfer / plan_return     up 100 -> shift -> down 60, and the exact reverse
 
 Each one returns a `Path`: a time-stamped list of joint angles the arm should follow.
 Planning never moves the arm. To actually move, hand the Path to `arm_client.ArmClient.run(path)`.
@@ -435,13 +437,63 @@ def plan_travel(q_now, target, *, speed_mm_s: float = DEFAULT_TRAVEL_SPEED,
     return path
 
 
+def plan_shift(q_now, dxy_mm, *, speed_mm_s: float = DEFAULT_TRAVEL_SPEED, label: str | None = None,
+               workspace_mm=None) -> Path:
+    """Slide the gripper by a 2-D offset in its CURRENT horizontal plane: pure translation.
+
+    Height and orientation are locked for the whole move (an upright tube stays exactly as upright).
+
+    Inputs
+        q_now  : current joint angles, degrees
+        dxy_mm : (dx, dy) in mm, arm base frame: x = away from the arm base, y = to the arm's left
+        speed_mm_s, workspace_mm : as in plan_line
+    Output: Path. Raises PlanError if any point of the line is unreachable at this height/orientation.
+    """
+    dx, dy = (float(v) for v in dxy_mm)
+    p0, _ = fk_mm(q_now)
+    return plan_line(q_now, p0 + np.array([dx, dy, 0.0]), None, speed_mm_s=speed_mm_s,
+                     label=label or f"shift ({dx:+.0f}, {dy:+.0f}) mm", workspace_mm=workspace_mm)
+
+
+# Heights for the vial -> compartment round trip (mm). Lifting 100 then lowering 60 puts the pour
+# pose 40 mm above the grab pose, which clears the compartment walls; the return reverses both.
+TRANSFER_LIFT_MM = 100.0
+TRANSFER_LOWER_MM = 60.0
+
+
+def plan_transfer(q_grab, dxy_mm, *, lift_mm: float = TRANSFER_LIFT_MM, lower_mm: float = TRANSFER_LOWER_MM,
+                  workspace_mm=None) -> list[Path]:
+    """Out trip, from the pose a grab ends in (tube held in its slot) to the pour-ready pose:
+        lift lift_mm  ->  shift (dx, dy) in that locked horizontal plane  ->  lower lower_mm
+    Inputs: q_grab = joint angles after the grab (degrees); dxy_mm = 2-D distance vial -> compartment (mm).
+    Output: [lift, shift, lower] Paths, all planned before anything moves."""
+    lift = plan_lift(q_grab, lift_mm, workspace_mm=workspace_mm)
+    shift = plan_shift(lift.final_joints, dxy_mm, label=f"carry ({dxy_mm[0]:+.0f}, {dxy_mm[1]:+.0f}) mm",
+                       workspace_mm=workspace_mm)
+    lower = plan_lower(shift.final_joints, lower_mm, workspace_mm=workspace_mm)
+    return [lift, shift, lower]
+
+
+def plan_return(q_pour, dxy_mm, *, lift_mm: float = TRANSFER_LIFT_MM, lower_mm: float = TRANSFER_LOWER_MM,
+                workspace_mm=None) -> list[Path]:
+    """Return trip: the out trip with every parameter reversed.
+        lift lower_mm  ->  shift (-dx, -dy)  ->  lower lift_mm
+    Inputs: q_pour = joint angles at the pour-ready pose (tube upright again); dxy_mm = the SAME
+    vial -> compartment offset that plan_transfer used. Ends where the grab ended (within IK tolerance)."""
+    up = plan_lift(q_pour, lower_mm, workspace_mm=workspace_mm)
+    back = plan_shift(up.final_joints, (-float(dxy_mm[0]), -float(dxy_mm[1])),
+                      label=f"carry back ({-dxy_mm[0]:+.0f}, {-dxy_mm[1]:+.0f}) mm", workspace_mm=workspace_mm)
+    down = plan_lower(back.final_joints, lift_mm, workspace_mm=workspace_mm)
+    return [up, back, down]
+
+
 def plan_sequence(q_now, steps: list[tuple], workspace_mm=None) -> list[Path]:
     """Plan several moves back to back; each starts where the previous one ends.
 
     Inputs
         q_now : current joint angles, degrees
         steps : list like [("lift", 100), ("travel", spot_q), ("lower", 60)]
-                  ("lift", mm) | ("lower", mm) | ("travel", target)  -- target as in plan_travel
+                  ("lift", mm) | ("lower", mm) | ("travel", target) | ("shift", (dx, dy))
     Output
         list of Paths. Planning the whole sequence first means a failure in step 3 is found
         BEFORE step 1 starts moving.
@@ -454,6 +506,8 @@ def plan_sequence(q_now, steps: list[tuple], workspace_mm=None) -> list[Path]:
             p = plan_lower(q, arg, workspace_mm=workspace_mm)
         elif kind == "travel":
             p = plan_travel(q, arg, workspace_mm=workspace_mm)
+        elif kind == "shift":
+            p = plan_shift(q, arg, workspace_mm=workspace_mm)
         else:
             raise ValueError(f"unknown step {kind!r}")
         paths.append(p)

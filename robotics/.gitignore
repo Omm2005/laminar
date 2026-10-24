@@ -6,3 +6,4 @@ arm_status.json
 *.tmp
 STOP
 __pycache__/
+arm_tilt.json

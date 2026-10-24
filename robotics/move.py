@@ -12,7 +12,7 @@ Run from the robotics/ folder, with arm_server.py already running:
 
 Options
     --run            actually move the arm (otherwise: plan and print only)
-    --mode moves|path  how to send the plan to arm_server (see arm_client.py); default moves
+    --mode moves|path  how to send the plan to arm_server (see arm_client.py); default path (continuous)
     --speed MM_S     override the peak gripper speed
     --no-workspace   skip the workspace box check from bench.yaml (only for testing poses near its edges)
 """
@@ -46,7 +46,7 @@ def main() -> None:
     ap.add_argument("arg", help="mm for lift/lower, spot name for travel/teach/from-recording")
     ap.add_argument("csv", nargs="?", help="data.csv path, for from-recording")
     ap.add_argument("--run", action="store_true")
-    ap.add_argument("--mode", choices=["moves", "path"], default="moves")
+    ap.add_argument("--mode", choices=["moves", "path"], default="path")
     ap.add_argument("--speed", type=float)
     ap.add_argument("--lower-next", type=float, default=0.0)
     ap.add_argument("--no-workspace", action="store_true")

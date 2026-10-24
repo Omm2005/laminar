@@ -1,0 +1,24 @@
+# layout.yaml: where each compartment is relative to each vial. The ONLY numbers to measure on the bench.
+#
+# routes.<vial>.<compartment> = [dx, dy] in millimetres, arm base frame, horizontal plane:
+#   dx = away from the arm base (positive = further out), dy = to the arm's left (positive = left).
+# Measure from the vial's centre (where its grab ends, tube still in the stand) to the point where the
+# tube should hang for pouring into that compartment. `null` = not measured yet.
+#
+# transfer.py then does, from the pose the grab ends in:
+#   lift lift_mm -> shift (dx, dy) at that height -> lower lower_mm -> adaptive pour (wrist roll)
+#   -> lift lower_mm -> shift (-dx, -dy) -> lower lift_mm      (ends exactly where the grab ended)
+lift_mm: 100
+lower_mm: 60
+
+pour:
+  joint: 6             # wrist roll
+  direction: 1         # +1 or -1: which way the roll tips the tube's lip toward the compartment
+  max_rate_deg_s: 120  # roll speed limit enforced by arm_server
+  udp_port: 5555       # PourFrame JSON from the side camera (software/laminar/pour.py)
+
+routes:
+  vial_A: {well_1: null, well_2: null, well_3: null, well_4: null}
+  vial_B: {well_1: null, well_2: null, well_3: null, well_4: null}
+  vial_C: {well_1: null, well_2: null, well_3: null, well_4: null}
+  vial_D: {well_1: null, well_2: null, well_3: null, well_4: null}

@@ -4,17 +4,37 @@ arm.py (MotorBridge driver), IK, S-curve, pose-save script, bench.yaml, pick/car
 Windows follower driver, leader-arm teleop, recording and the scripted arm server (Amogh): see [TELEOP.md](TELEOP.md).
 ## Shared moves: lift, lower, travel
 
-Every task is: recorded grab → `lift(100)` → `travel_to(well)` → `lower(60)` → pour → `lift(60)` →
-`travel_to(slot)` → `lower(100)` → grab played backwards. The three middle moves are computed here,
-not recorded, because a recording only works from the exact pose it was recorded at.
+Every task is: recorded grab → `lift(100)` → shift `(dx, dy)` in that locked horizontal plane → `lower(60)` →
+adaptive pour → `lift(60)` → shift `(-dx, -dy)` → `lower(100)` → grab played backwards. The moves in between
+are computed here, not recorded, because a recording only works from the exact pose it was recorded at.
+The only bench measurements are the 2-D distances from each vial to each compartment, in `layout.yaml`.
+
+### Vial → compartment → vial in one command: `transfer.py`
+
+```
+cd robotics
+python transfer.py vial_A well_2                              # plan the six moves and print them
+python transfer.py vial_A well_2 --ml 2 --liquid blue --run   # run, camera-driven pour
+python transfer.py vial_A well_2 --pour fixed --tilt 80 --hold 3 --run   # no camera yet: fixed tilt
+```
+
+All six moves are planned (and safety-checked) before anything moves, and each is played continuously.
+The pour is Om's `PourController` (`software/laminar/pour.py`) reading PourFrame JSON on UDP 5555 and
+streaming the wrist roll live through arm_server's `tilt_stream` op; if those updates stop for 0.5 s
+arm_server tilts the tube back upright on its own. The roll never goes past its soft limit (±90°): the
+controller's `max_tilt` is capped to the room left from the current roll angle. `pour.direction` in
+`layout.yaml` sets which way the roll tips the lip toward the compartment. The return trip starts from the
+pour-ready pose (roll back at its base angle) and ends where the grab ended, within 1 mm.
 
 | File | What it does |
 | --- | --- |
-| `motion.py` | Plans straight-line moves with IK: `plan_lift`, `plan_lower`, `plan_travel`, `plan_sequence`. Pure math, never moves the arm. |
-| `arm_client.py` | Sends a planned path to `arm_server.py` (`mode="moves"` works today; `mode="path"` needs the op below). |
+| `motion.py` | Plans straight-line moves with IK: `plan_lift`, `plan_lower`, `plan_shift`, `plan_travel`, `plan_transfer` / `plan_return`, `plan_sequence`. Pure math, never moves the arm. |
+| `arm_client.py` | Sends a planned path to `arm_server.py` (`mode="path"`, continuous, default; `mode="moves"` fallback) and streams live pour-roll targets. |
+| `layout.yaml` | 2-D offsets (mm) from each vial to each compartment, lift/lower heights, pour roll direction. |
+| `transfer.py` | The full round trip with the adaptive pour (above). |
 | `spots.py` / `spots.yaml` | Taught poses: `slot_A..D` (where each grab ends) and `well_1..4` (pour-ready pose over each well). |
 | `move.py` | CLI: plan, run, teach spots. |
-| `tests/test_motion.py` | Checks straightness, height, orientation, speed caps and refusals. `python -m pytest -q tests` |
+| `tests/` | `test_motion.py`: straightness, height, orientation, speed caps, refusals. `test_transfer.py`: flat shifts, round trip back onto the grab pose, layout parsing, roll limit, simulated adaptive pour. `python -m pytest -q tests` |
 
 Units: joint angles in **degrees** `{1..6}` in the follower frame (same as `arm_server.py` and recordings),
 positions in **mm** in the arm base frame, speeds in mm/s. Forward kinematics comes from `kinematics.py`.
@@ -29,8 +49,9 @@ positions in **mm** in the arm base frame, speeds in mm/s. Forward kinematics co
 5. A minimum-jerk speed profile (gentle start and stop) is sampled at 50 Hz. If a joint would exceed
    45 °/s the whole move is slowed down.
 
-Lift and lower keep the gripper's orientation exactly. Travel keeps the height exactly and turns only
-about vertical, so an upright tube stays upright; a target that would tilt the tube is refused.
+Lift, lower and shift keep the gripper's orientation exactly (shift is a pure translation). Travel keeps
+the height exactly and turns only about vertical, so an upright tube stays upright; a target that would
+tilt the tube is refused.
 
 ### Use
 
@@ -57,7 +78,7 @@ arm = ArmClient()
 q = arm.current_joints()
 paths = M.plan_sequence(q, [("lift", 100), ("travel", get_spot("well_2")), ("lower", 60)])  # all planned before anything moves
 for p in paths:
-    arm.run(p, mode="moves")
+    arm.run(p)          # continuous ("path" mode)
 ```
 
 ### Heights must agree
@@ -66,25 +87,13 @@ Travel never changes height, so `lift(100)` from a slot then `lower(60)` reaches
 taught pose is 40 mm higher than the slot pose. `--lower-next 60` (or `height_offset_mm=60`) prints the
 mismatch; fix it by re-teaching the well pose or changing the lower distance.
 
-### Smooth playback: proposed `path` op for arm_server.py
+### Continuous playback: arm_server.py `path` and `tilt_stream` ops
 
-`mode="moves"` sends one joint move per 10 mm; arm_server eases in and out of each, so the arm pulses
-slightly. For liquid, add this op to `arm_server.py` and use `mode="path"`:
-
-```python
-elif op == "path":   # {"op": "path", "points": [{"1": deg, ..., "6": deg}, ...], "hz": 50}
-    pts = [{int(k): float(v) for k, v in p.items()} for p in c["points"]]
-    period = 1.0 / float(c.get("hz", 50.0))
-    for k, p in enumerate(pts):
-        for m, deg in p.items():
-            cmd[m] = clamp(m, deg)
-        t_next = time.time() + period
-        while time.time() < t_next:
-            tick()
-        if k % 10 == 0:
-            write_status(busy=True, progress=round(k / len(pts), 2), doing="path")
-    last["result"] = f"path: {len(pts)} points done"
-```
+`{"op": "path", "points": [...], "hz": 50}` plays a planned Path continuously, interpolating between points at
+the 100 Hz control rate, with no easing between them. It is refused unless the first point is within 2° of the
+current command and no step needs more than 90 °/s. `{"op": "tilt_stream", "joint": 6, "base": deg}` follows
+live offsets from `arm_tilt.json` (rate-limited, clamped to the joint limits) until told `done` or until
+updates stop, then returns the joint to `base`. `mode="moves"` is still there as a fallback.
 
 ### Tuning knobs (top of `motion.py`)
 

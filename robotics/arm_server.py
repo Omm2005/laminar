@@ -5,7 +5,11 @@ Command file (write atomically; a new "id" triggers execution). Angles are degre
   {"id": 2, "op": "gripper", "target": 78, "speed": 30}                 # gripper position (0 = closed)
   {"id": 3, "op": "grasp", "speed": 8, "close_torque": 1.2, "hold_torque": 0.8}
         # close slowly until the encoder shows the jaws stopped on an object, then hold lightly
-  {"id": 4, "op": "rest"}                                               # ease to zero pose, disable, exit
+  {"id": 4, "op": "path", "points": [{"1": deg, ..., "6": deg}, ...], "hz": 50}
+        # play a pre-planned path continuously (motion.py); refused unless it starts at the current pose
+  {"id": 5, "op": "tilt_stream", "joint": 6, "base": deg, "max_rate_deg_s": 120, "timeout_s": 0.5}
+        # follow live offsets from arm_tilt.json {"seq", "deg", "done"} (adaptive pour); watchdog tilts back
+  {"id": 6, "op": "rest"}                                               # ease to zero pose, disable, exit
 Status is written to arm_status.json after every command and ~5x per second while busy.
 Creating a file named STOP also returns to rest and exits.
 
@@ -23,6 +27,9 @@ from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus
 
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
+TILT_FILE = HERE / "arm_tilt.json"   # live pour-roll targets for the tilt_stream op
+PATH_START_TOL_DEG = 2.0    # a path must start where the arm is commanded now
+PATH_MAX_JOINT_SPEED = 90.0  # deg/s between consecutive path points; faster = refused
 STOP_FILE = HERE / "STOP"
 GRIPPER = 7
 HZ = 100.0
@@ -144,6 +151,71 @@ def main():
             if s >= 1.0:
                 return f"{label}: done in {duration:.1f}s"
 
+    def play_path(points, hz):
+        """Follow a pre-planned joint path continuously (no easing between points).
+        points: [{1: deg, ..., 6: deg}, ...] spaced 1/hz apart; interpolated at the control rate."""
+        arm_ids = [m for m in ids if m != GRIPPER]
+        off = max(abs(points[0].get(m, cmd[m]) - cmd[m]) for m in arm_ids)
+        if off > PATH_START_TOL_DEG:
+            return f"path refused: first point is {off:.1f} deg from the current command (re-plan)"
+        for a, b in zip(points, points[1:]):
+            jump = max(abs(b.get(m, a.get(m, cmd[m])) - a.get(m, cmd[m])) for m in arm_ids)
+            if jump * hz > PATH_MAX_JOINT_SPEED:
+                return f"path refused: a step needs {jump * hz:.0f} deg/s (> {PATH_MAX_JOINT_SPEED:.0f})"
+        pts = [{m: clamp(m, p.get(m, cmd[m])) for m in arm_ids} for p in points]
+        duration = (len(pts) - 1) / hz
+        t0 = time.time()
+        t_status = 0.0
+        while True:
+            x = min(len(pts) - 1.0, (time.time() - t0) * hz)
+            i = min(int(x), len(pts) - 2) if len(pts) > 1 else 0
+            f = x - i
+            for m in arm_ids:
+                cmd[m] = pts[i][m] if len(pts) == 1 else pts[i][m] + (pts[i + 1][m] - pts[i][m]) * f
+            tick()
+            if time.time() - t_status > 0.2:
+                t_status = time.time()
+                write_status(busy=True, progress=round(x / max(1, len(pts) - 1), 2), doing="path")
+            if x >= len(pts) - 1:
+                return f"path: {len(pts)} points in {duration:.1f}s"
+
+    def tilt_stream(joint, base, max_rate, timeout_s):
+        """Live control of one joint (the pour roll) from TILT_FILE: {"seq": n, "deg": offset, "done": bool}.
+        Offsets are relative to `base`, rate-limited, clamped to the joint limits. If the writer goes quiet
+        for timeout_s, or says done, the joint returns to base and the op ends."""
+        cmd[joint] = clamp(joint, cmd[joint])
+        target = 0.0
+        last_seq, last_t = None, time.time()
+        ended = "done"
+        t_status = 0.0
+        while True:
+            try:
+                msg = json.loads(TILT_FILE.read_text())
+            except (ValueError, OSError):
+                msg = None
+            if msg and msg.get("seq") != last_seq:
+                last_seq, last_t = msg.get("seq"), time.time()
+                target = float(msg.get("deg", 0.0))
+                if msg.get("done"):
+                    target = 0.0
+                    break
+            if time.time() - last_t > timeout_s:
+                ended = f"watchdog: no tilt update for {timeout_s:.2f}s"
+                break
+            goal = clamp(joint, base + target)
+            step = max_rate * dt
+            cmd[joint] += max(-step, min(step, goal - cmd[joint]))
+            tick()
+            if time.time() - t_status > 0.2:
+                t_status = time.time()
+                write_status(busy=True, doing="tilt_stream", tilt_deg=round(cmd[joint] - base, 1))
+        while abs(cmd[joint] - base) > 0.05:  # back to upright at the same rate limit
+            step = max_rate * dt
+            cmd[joint] += max(-step, min(step, base - cmd[joint]))
+            tick()
+        cmd[joint] = base
+        return f"tilt_stream ended ({ended}), J{joint} back at {base:.1f}"
+
     def gripper_move(target, speed, limit=GRIP_MOVE_TORQUE):
         target = clamp(GRIPPER, target)
         grip["limit"] = limit
@@ -250,6 +322,14 @@ def main():
                     extra = grasp(float(c.get("speed", 8.0)), float(c.get("close_torque", 1.2)),
                                   float(c.get("hold_torque", 0.8)))
                     last["result"] = extra.pop("result")
+                elif op == "path":
+                    pts = [{int(k): float(v) for k, v in p.items()} for p in c["points"]]
+                    last["result"] = play_path(pts, float(c.get("hz", 50.0))) if pts else "path: empty"
+                elif op == "tilt_stream":
+                    j = int(c.get("joint", 6))
+                    last["result"] = tilt_stream(j, float(c.get("base", cmd[j])),
+                                                 float(c.get("max_rate_deg_s", 120.0)),
+                                                 float(c.get("timeout_s", 0.5)))
                 elif op in ("rest", "stop"):
                     raise KeyboardInterrupt
                 else:
