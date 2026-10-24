@@ -63,16 +63,26 @@ npm run dev                     # http://localhost:5173
 
 All data via `useQuery` — no polling, Convex pushes updates.
 
-## Robot client (not shipped here)
+## Robot client
 
-The pour-side robot client is `pour/*.py`. To wire it to Convex, the next step is a thin
-Python shim that:
-1. polls `jobs.nextForRobot` for an approved job,
-2. drives `pour/run_task.py`'s primitives one at a time,
-3. for each primitive calls `steps.start` / `steps.end` and streams telemetry to `robot.pushTelemetry` + levels to `robot.pushLevels`,
-4. records the final pour via `pours.record` (plus `snapshots.generateUploadUrl` for before/after images).
+Ships as `pour/robot_client.py` (uses the `convex` Python SDK). It polls
+`jobs.nextForRobot`, drives each primitive via subprocess (same way `run_task.py`
+does), streams `arm_status.json` to `robot.pushTelemetry` at 10 Hz, records the
+final pour from `pour/logs/pours.jsonl` via `pours.record`, and aborts on
+`control.stopRequested`. Run it next to the robot:
 
-Not built yet — the console is the backend first.
+```bash
+# in a third terminal (convex dev + npm run dev already running)
+python pour/robot_client.py --level auto
+# flags:
+#   --dry-run      run every primitive with --dry-run (no motion)
+#   --once         pick up one approved job and exit
+#   --poll 2       seconds between polls when idle
+#   --keep-server  don't stop arm_server when the client exits
+```
+
+Levels aren't streamed yet (would require `adaptive_pour.py` to push `levels` samples
+during polling). The pour chart on `/live` stays empty until that's wired.
 
 ## Troubleshooting
 

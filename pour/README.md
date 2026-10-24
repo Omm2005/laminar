@@ -46,6 +46,22 @@ that you fill in by hand. The only closed-loop signal is the external level came
    the current flow-table value. Edit `pour.yaml`'s `flow_table_ml_per_s` by hand to update it.
    No automatic fitting. All pours are logged line-by-line to `pour/logs/pours.jsonl`.
 
+## Driving pours from the web console
+
+Instead of typing `run_task.py` strings, you can submit jobs in the Laminar Console
+(`console/`) and let `robot_client.py` pick them up.
+
+```bash
+# in another terminal, console must be running first (see console/README.md)
+python pour/robot_client.py --level auto
+# add --dry-run to run every primitive in dry-run mode (no motion)
+# add --once to pick up a single approved job and exit
+```
+
+`robot_client.py` polls `jobs.nextForRobot`, runs each primitive via subprocess (same
+as `run_task.py`), pushes `arm_status.json` to Convex at 10 Hz as telemetry, records
+the final pour from `logs/pours.jsonl`, and aborts if `control.stopRequested` turns on.
+
 ## What's in each file
 
 | file | purpose |
@@ -65,6 +81,7 @@ that you fill in by hand. The only closed-loop signal is the external level came
 | `primitives/home.py` | move to the `home` pose. |
 | `adaptive_pour.py` | single-joint tilt pour, 5 Hz level polling, drift abort, pour log. |
 | `run_task.py` | parse NL, print plan, run primitives, honor `STOP`, `--confirm-each`. |
+| `robot_client.py` | polls Convex `jobs.nextForRobot`, drives primitives, streams telemetry, records pours. |
 
 ## Rules this code follows
 
