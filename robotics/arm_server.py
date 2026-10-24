@@ -23,8 +23,7 @@ import sys
 import time
 
 from leader_arm import HERE, MAPPING, load_follower_zero
-from dynamics import gravity_torque
-from robstride_can import JOINTS, MODELS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
+from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
@@ -43,13 +42,7 @@ VEL_FF_SMOOTH = 0.5      # low-pass on the feedforward (0..1, 1 = no smoothing)
 # measured on the A->B travel): its friction is ~1 N.m (it parks 1.1 deg short). Stiffer gains, plus a
 # Coulomb friction feedforward kept below the friction itself so it can never drive the joint on its own.
 GAIN_OVERRIDE = {1: (120.0, 5.0)}   # mid: (kp, kd) used by arm_server instead of robstride_can.JOINTS
-# Coulomb friction per joint, ~70 % of what the replay logs show (measured torque - gravity, along the motion)
-FRICTION_FF_NM = {1: 0.6, 2: 0.25, 3: 0.10, 5: 0.07, 6: 0.07}   # mid: N.m pushed along the planned motion
-# Gravity feedforward from the URDF (dynamics.py). Checked against logged motor torques: J2 matches at 0.93x,
-# J3 at 0.88x, J4 ~2 N.m in both. Under-compensate slightly so it can never push the arm up on its own.
-GRAVITY_SCALE = 0.9
-GRAVITY_REFRESH_DEG = 0.2            # recompute gravity when the command has moved this far (it costs ~0.7 ms)
-FF_TORQUE_LIMIT = 0.5                # feedforward never exceeds this fraction of a joint's torque range
+FRICTION_FF_NM = {1: 0.6}           # mid: N.m pushed in the direction of planned motion
 FRICTION_FF_VEL = 0.02              # rad/s where the friction feedforward reaches ~76 % (tanh)
 CONTACT_LAG_DEG = 6.0    # jaws lagging the closing target by this much ...
 CONTACT_VEL = 0.05       # ... while (nearly) stopped (rad/s) ...
@@ -64,13 +57,6 @@ IDLE_TIMEOUT_S = 15 * 60
 LIMITS = {mid: lim for (mid, _scale, lim) in MAPPING.values()}
 
 
-def catmull_rom(p0, p1, p2, p3, f):
-    """Point between p1 and p2 (f in 0..1) on the Catmull-Rom spline through p0..p3: passes through every
-    path point with a continuous velocity, so the commanded speed no longer steps at each point."""
-    return 0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f
-                  + (3 * p1 - p0 - 3 * p2 + p3) * f * f * f)
-
-
 def smoothstep(s):
     return s * s * (3 - 2 * s)
 
@@ -79,9 +65,6 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--hold-grip", action="store_true")
-    ap.add_argument("--no-gravity", dest="gravity", action="store_false", help="no gravity feedforward")
-    ap.add_argument("--no-friction", dest="friction", action="store_false", help="no friction feedforward")
-    ap.add_argument("--linear", action="store_true", help="path op: straight-line interpolation (old behaviour)")
     ap.add_argument("--hold-torque", type=float, default=1.0)
     ap.add_argument("--idle-min", type=float, default=IDLE_TIMEOUT_S / 60,
                     help="rest and exit after this many minutes with no command (camera calibration can take long)")
@@ -94,7 +77,6 @@ def main():
     cmd = {}
     grip = {"target": 0.0, "limit": GRIP_MOVE_TORQUE}
     vff = {m: 0.0 for m in ids if m != GRIPPER}  # velocity feedforward per arm joint, rad/s
-    grav, grav_at = {}, {}                          # gravity feedforward (N.m) and the pose it was computed at
     clock = {"t": time.perf_counter(), "next": time.perf_counter(), "prev": {}, "n": 0,
              "t_rate": time.perf_counter(), "hz": None}
     fine_timer()
@@ -120,11 +102,7 @@ def main():
                 # velocity feedforward: without it the kd term brakes against every planned motion
                 # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
                 kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
-                tau = grav.get(mid, 0.0)
-                if args.friction:
-                    tau += FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL)
-                lim = FF_TORQUE_LIMIT * MODELS[JOINTS[mid][0]][1]
-                tau = max(-lim, min(lim, tau))
+                tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL)
                 bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
 
     def check():
@@ -175,9 +153,6 @@ def main():
                 v = max(-VEL_FF_MAX, min(VEL_FF_MAX, v))
                 vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
         clock["prev"], clock["t"] = dict(cmd), now
-        if args.gravity and max(abs(cmd[m] - grav_at.get(m, 1e9)) for m in vff) > GRAVITY_REFRESH_DEG:
-            grav_at.update({m: cmd[m] for m in vff})
-            grav.update({m: GRAVITY_SCALE * t for m, t in gravity_torque(grav_at).items()})
         send_all()
         check()
         clock["next"] += dt
@@ -215,8 +190,7 @@ def main():
 
     def play_path(points, hz):
         """Follow a pre-planned joint path continuously (no easing between points).
-        points: [{1: deg, ..., 6: deg}, ...] spaced 1/hz apart; interpolated at the control rate along a
-        Catmull-Rom spline (smooth velocity; --linear for straight segments)."""
+        points: [{1: deg, ..., 6: deg}, ...] spaced 1/hz apart; interpolated at the control rate."""
         arm_ids = [m for m in ids if m != GRIPPER]
         off = max(abs(points[0].get(m, cmd[m]) - cmd[m]) for m in arm_ids)
         if off > PATH_START_TOL_DEG:
@@ -237,13 +211,7 @@ def main():
             i = min(int(x), len(pts) - 2) if len(pts) > 1 else 0
             f = x - i
             for m in arm_ids:
-                if len(pts) == 1:
-                    cmd[m] = pts[0][m]
-                elif args.linear:
-                    cmd[m] = pts[i][m] + (pts[i + 1][m] - pts[i][m]) * f
-                else:
-                    cmd[m] = catmull_rom(pts[max(i - 1, 0)][m], pts[i][m], pts[i + 1][m],
-                                         pts[min(i + 2, len(pts) - 1)][m], f)
+                cmd[m] = pts[i][m] if len(pts) == 1 else pts[i][m] + (pts[i + 1][m] - pts[i][m]) * f
             if grips:
                 grip["target"] = grips[i] if len(grips) == 1 else grips[i] + (grips[i + 1] - grips[i]) * f
             tick()
