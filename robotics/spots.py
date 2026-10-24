@@ -3,6 +3,7 @@
 A "spot" is a named arm pose: 6 joint angles in degrees, follower frame (same as arm_server.py).
     slot_A..slot_D : pose at the end of each grab recording (tube held, still in the stand)
     well_1..well_4 : pour-ready pose over each well (tube upright, lowered, lip just above the well)
+    vial_*         : named vial poses, e.g. vial_A_initial_position (where every run with vial A starts)
 """
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from pathlib import Path as FilePath
 import yaml
 
 SPOTS_FILE = FilePath(__file__).resolve().parent / "spots.yaml"
+GROUP_PREFIX = {"slots": "slot_", "wells": "well_", "vials": "vial_"}   # spots.yaml group -> name prefix
+GROUPS = tuple(GROUP_PREFIX)
 
 
 def load_spots(path: FilePath = SPOTS_FILE) -> dict[str, dict[int, float] | None]:
@@ -19,7 +22,7 @@ def load_spots(path: FilePath = SPOTS_FILE) -> dict[str, dict[int, float] | None
     Output: flat dict {"slot_A": {1: deg, ..., 6: deg} or None, "well_1": ..., ...}"""
     data = yaml.safe_load(path.read_text()) or {}
     out: dict[str, dict[int, float] | None] = {}
-    for group in ("slots", "wells"):
+    for group in GROUPS:
         for name, q in (data.get(group) or {}).items():
             out[name] = None if q is None else {i + 1: float(q[i]) for i in range(6)}
     return out
@@ -38,19 +41,21 @@ def get_spot(name: str, path: FilePath = SPOTS_FILE) -> dict[int, float]:
 def save_spot(name: str, q: dict[int, float], path: FilePath = SPOTS_FILE) -> None:
     """Write one spot into spots.yaml, keeping every other spot.
     Inputs: name like "well_2" or "slot_A"; q = joint angles in degrees {1..6}."""
-    group = "slots" if name.startswith("slot_") else "wells" if name.startswith("well_") else None
+    group = next((g for g, prefix in GROUP_PREFIX.items() if name.startswith(prefix)), None)
     if group is None:
-        raise ValueError("spot names must start with slot_ or well_")
+        raise ValueError("spot names must start with " + ", ".join(GROUP_PREFIX.values()))
     data = yaml.safe_load(path.read_text()) or {}
     data.setdefault(group, {})[name] = [round(float(q[i]), 3) for i in range(1, 7)]
     # Rewrite by hand so each pose stays on one readable line: well_2: [-31.0, 100.0, ...]
     header = "".join(line + "\n" for line in path.read_text().splitlines() if line.startswith("#"))
     body = ""
-    for grp in ("slots", "wells"):
+    for grp in GROUPS:
+        if grp == "vials" and not data.get(grp):
+            continue
         body += f"{grp}:\n"
         for spot, val in (data.get(grp) or {}).items():
             body += f"  {spot}: {'null' if val is None else '[' + ', '.join(str(v) for v in val) + ']'}\n"
-    rest = {k: v for k, v in data.items() if k not in ("slots", "wells")}   # e.g. vision.py's well_offsets
+    rest = {k: v for k, v in data.items() if k not in GROUPS}   # e.g. vision.py's well_offsets
     if rest:
         body += yaml.safe_dump(rest, sort_keys=False, default_flow_style=None)
     path.write_text(header + body)

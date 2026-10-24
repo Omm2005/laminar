@@ -492,11 +492,13 @@ def save_well_offset(name: str, offset: dict, path: FilePath = SPOTS_FILE) -> No
     data.setdefault("well_offsets", {})[name] = offset
     header = "".join(line + "\n" for line in text.splitlines() if line.startswith("#"))
     body = ""
-    for grp in ("slots", "wells"):
+    for grp in ("slots", "wells", "vials"):
+        if grp == "vials" and not data.get(grp):
+            continue
         body += f"{grp}:\n"
         for spot, val in (data.get(grp) or {}).items():
             body += f"  {spot}: {'null' if val is None else '[' + ', '.join(str(v) for v in val) + ']'}\n"
-    rest = {k: v for k, v in data.items() if k not in ("slots", "wells")}
+    rest = {k: v for k, v in data.items() if k not in ("slots", "wells", "vials")}
     path.write_text(header + body + yaml.safe_dump(rest, sort_keys=False, default_flow_style=None))
 
 
