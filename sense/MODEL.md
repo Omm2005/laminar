@@ -21,6 +21,22 @@ The trained model is in the repo: `sense/level_seg.onnx` (+ `level_seg.json`, it
 
 macOS: give your terminal camera access (System Settings > Privacy & Security > Camera), then restart it.
 
+### Windows / Linux
+
+The model, `live_view.py` and recording work the same everywhere. What changes:
+
+| | macOS | Windows (PowerShell) | Linux |
+| --- | --- | --- | --- |
+| make the venv | `python3 -m venv .venv` | `py -m venv .venv` | `python3 -m venv .venv` |
+| activate it | `source .venv/bin/activate` | `.venv\Scripts\activate` | `source .venv/bin/activate` |
+| python in the commands below | `../.venv/bin/python` | `..\.venv\Scripts\python` | `../.venv/bin/python` |
+| camera access | Privacy & Security > Camera for the terminal | Settings > Privacy > Camera, "let desktop apps" on | add yourself to the `video` group (`sudo usermod -aG video $USER`, log in again) |
+| camera number | `python cameras.py` lists them | same (USB cameras are often 1 or 2; the laptop camera is 0) | same, or a fixed name: `--cam /dev/v4l/by-id/...` |
+| start arm_server | `python mac_run.py arm_server.py` (macOS USB fixes) | `python arm_server.py` (the CAN driver was written on Windows) | `python arm_server.py`, untested; the USB-CAN adapter needs a udev rule or `sudo` |
+
+With the venv activated, plain `python` works on all three (`python live_view.py ...`).
+If `review.mp4` will not play on Windows/Linux, open it in VLC (it falls back to the mp4v codec there).
+
 ## 2. Test the model (camera only, no arm)
 
 ```bash
