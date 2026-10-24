@@ -17,11 +17,11 @@ _MIN_PERIOD_S = 0.1  # 10 Hz
 _last_t = 0.0
 
 
-def write(joints, commanded=None) -> None:
-    """Dump {"t": ms, "joints": [measured j1..j6], "commanded"?: [target j1..j6]} if
-    at least 100 ms since the last write. `joints` is the measured position (what the
-    sensors report, used by the dashboard gauges and 3D model); `commanded` is the
-    latest target, included if the caller has it."""
+def write(joints, commanded=None, gripper=None) -> None:
+    """Dump {"t": ms, "joints": [measured j1..j6], "commanded"?: [target j1..j6], "gripper"?: deg}
+    if at least 100 ms since the last write. `joints` is the measured position (what the
+    sensors report, used by the dashboard gauges and 3D model); `commanded` is the latest
+    target; `gripper` is the gripper angle in degrees from zero (drives the 3D jaws)."""
     global _last_t
     now = time.perf_counter()
     if now - _last_t < _MIN_PERIOD_S:
@@ -32,6 +32,8 @@ def write(joints, commanded=None) -> None:
         payload = {"t": time.time() * 1000.0, "joints": [float(x) for x in joints]}
         if commanded is not None:
             payload["commanded"] = [float(x) for x in commanded]
+        if gripper is not None:
+            payload["gripper"] = float(gripper)
         tmp.write_text(json.dumps(payload, separators=(",", ":")))
         os.replace(tmp, _PATH)
     except OSError:

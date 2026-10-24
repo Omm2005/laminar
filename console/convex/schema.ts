@@ -53,6 +53,7 @@ export default defineSchema({
     t: v.number(),
     joints: v.array(v.number()),              // MEASURED J1..J6 in degrees (dashboard + 3D model)
     commanded: v.optional(v.array(v.number())), // target J1..J6 the arm_server is driving to
+    gripperDeg: v.optional(v.number()),       // gripper angle in degrees from zero (drives 3D jaws)
     gripperTorque: v.optional(v.number()),
     pourDeg: v.optional(v.number()),
   }).index("by_jobId_t", ["jobId", "t"])

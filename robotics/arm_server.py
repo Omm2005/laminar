@@ -147,7 +147,7 @@ def main():
                 vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
         clock["prev"], clock["t"] = dict(cmd), now
         send_all()
-        joint_state.write([rel(m) for m in range(1, 7)], commanded=[cmd[m] for m in range(1, 7)])  # measured + target, 10 Hz
+        joint_state.write([rel(m) for m in range(1, 7)], commanded=[cmd[m] for m in range(1, 7)], gripper=rel(GRIPPER))  # measured + target + gripper, 10 Hz
         check()
         clock["next"] += dt
         wait = clock["next"] - time.perf_counter()

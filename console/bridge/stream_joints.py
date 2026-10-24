@@ -55,7 +55,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--job-id", default=None, help="tag telemetry with a Convex jobs id")
     ap.add_argument("--period", type=float, default=0.1, help="seconds between reads")
-    ap.add_argument("--batch", type=int, default=10, help="samples per push")
+    ap.add_argument("--batch", type=int, default=1, help="samples per push (1 = near-realtime, raise for lower network overhead)")
     a = ap.parse_args()
 
     url = read_convex_url()
@@ -76,6 +76,8 @@ def main() -> None:
                 }
                 if "commanded" in s:
                     sample["commanded"] = [float(x) for x in s["commanded"]]
+                if "gripper" in s:
+                    sample["gripperDeg"] = float(s["gripper"])
                 batch.append(sample)
             if len(batch) >= a.batch:
                 payload: dict = {"samples": batch}

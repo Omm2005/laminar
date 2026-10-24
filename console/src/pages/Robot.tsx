@@ -70,7 +70,7 @@ export default function Robot() {
           <Arm3D
             samples={buf.current.slice()}
             status={status}
-            gripperDeg={0}
+            gripperDeg={telem?.gripperDeg ?? 0}
             pourChannel={activeJob?.channel ?? null}
             cameraPreset={cameraPreset}
           />

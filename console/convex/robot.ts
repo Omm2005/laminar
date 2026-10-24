@@ -9,6 +9,7 @@ export const pushTelemetry = mutation({
       t: v.number(),
       joints: v.array(v.number()),                 // measured, for gauges + 3D model
       commanded: v.optional(v.array(v.number())),  // target (optional)
+      gripperDeg: v.optional(v.number()),          // gripper angle in degrees from zero
       gripperTorque: v.optional(v.number()),
       pourDeg: v.optional(v.number()),
     })),
@@ -20,6 +21,7 @@ export const pushTelemetry = mutation({
         t: s.t,
         joints: s.joints,
         commanded: s.commanded,
+        gripperDeg: s.gripperDeg,
         gripperTorque: s.gripperTorque,
         pourDeg: s.pourDeg,
       });
