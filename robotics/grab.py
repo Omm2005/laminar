@@ -7,6 +7,7 @@
     python grab.py play vial_A            # print what it would do
     python grab.py play vial_A --run      # rest -> vial A (gripper closes on it), arm_server.py running
     python grab.py play vial_A --reverse --run   # back: gripper releases first, then vial A -> rest
+    python grab.py transfer vial_B --to vial_A_final_position --run   # grab, carry there, and back
 
 A motion starts from the first frame where the arm moves (still frames at the start are dropped) and ends at
 the chosen frame (default: the newest). It is replayed through arm_server's `path` op at the recording rate,
@@ -80,9 +81,44 @@ def play(name: str, run: bool, reverse: bool = False) -> None:
         sys.exit(f"STOPPED (arm is holding where it is): {e}")
 
 
+def transfer(name: str, to: str, run: bool, back: bool = True) -> None:
+    """Grab with a saved motion, then carry to a saved spot and back (episode.py's planned moves):
+    play paths/<name> (rest -> the vial, gripper closes) -> lift -> straight flat carry to above `to` -> lower
+    onto it; with back, the same moves in reverse and the grab backwards (releases the vial in its slot, rest)."""
+    from episode import plan_a_to_b, reverse_path
+    from spots import get_spot
+    m = load(name)
+    target = get_spot(to)
+    ep = {"A": {"command": {str(j): v for j, v in m["initial_position"].items()}},
+          "B": {"command": {str(j): v for j, v in target.items()}}}
+    moves = plan_a_to_b(ep)
+    print(f"{name} -> {to}: grab {len(m['points'])} points, {(len(m['points']) - 1) / m['hz']:.1f} s")
+    for p in moves:
+        print("  " + p.summary())
+    if back:
+        print("  then the same moves in reverse, and the grab backwards (vial back in its slot, arm to rest)")
+    if not run:
+        print("print only: add --run (arm_server.py must be running)")
+        return
+    from arm_client import ArmClient
+    client = ArmClient()
+    try:
+        play(name, run=True)
+        for p in moves:
+            print("  " + str(client.run(p).get("result")))
+        if back:
+            time.sleep(1.0)
+            for p in reversed(moves):
+                print("  " + str(client.run(reverse_path(p)).get("result")))
+            play(name, run=True, reverse=True)
+    except (RuntimeError, TimeoutError) as e:
+        sys.exit(f"STOPPED (arm is holding where it is): {e}")
+    print("transfer done" + (": vial back in its slot" if back else f": at {to}"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("op", choices=["save", "play", "list"])
+    ap.add_argument("op", choices=["save", "play", "list", "transfer"])
     ap.add_argument("name", nargs="?", help="motion name, e.g. vial_A")
     ap.add_argument("--rec", help="save: recording folder")
     ap.add_argument("--frame", type=int, default=None, help="save: last frame of the motion (default: newest)")
@@ -90,6 +126,8 @@ def main() -> None:
     ap.add_argument("--spot", default=None, help="save: spots.yaml name (default <name>_initial_position)")
     ap.add_argument("--run", action="store_true", help="play: move the arm")
     ap.add_argument("--reverse", action="store_true", help="play: backwards (gripper releases first)")
+    ap.add_argument("--to", default=None, help="transfer: spots.yaml target, e.g. vial_A_final_position")
+    ap.add_argument("--no-return", action="store_true", help="transfer: stay at the target")
     a = ap.parse_args()
     if a.op == "list":
         for n in names():
@@ -100,6 +138,11 @@ def main() -> None:
         ap.error("needs a motion name")
     if a.op == "play":
         play(a.name, a.run, a.reverse)
+        return
+    if a.op == "transfer":
+        if not a.to:
+            ap.error("transfer needs --to <spot>")
+        transfer(a.name, a.to, a.run, back=not a.no_return)
         return
     if not a.rec:
         ap.error("save needs --rec <recording folder>")
