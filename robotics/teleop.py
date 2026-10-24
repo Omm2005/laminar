@@ -17,7 +17,7 @@ import sys
 import time
 
 from leader_arm import HERE, LEADER_CAL_FILE, MAPPING, LeaderArm, load_follower_zero
-from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus
+from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 from recorder import Camera, Recorder
 
 try:
@@ -73,6 +73,7 @@ def main():
     STOP_FILE.unlink(missing_ok=True)
     ids = list(JOINTS)
     dt = 1.0 / args.hz
+    fine_timer()  # 1 ms sleeps on Windows, so --hz is actually reached
 
     camera = Camera(args.camera, args.width, args.height) if args.record and args.camera >= 0 else None
     recorder = None

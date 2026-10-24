@@ -8,8 +8,8 @@
     4. python episode.py plan                          # prints the moves, saves 2-D coordinates
        python episode.py replay --run                  # moves the arm
 
-Replay = the recorded rest -> A segment of the episode (leading idle frames skipped, slowed if any joint
-would exceed arm_server's path speed limit), the gripper set to its recorded value at A, then
+Replay = the recorded rest -> A segment of the episode, gripper included (leading idle frames skipped,
+slowed if any joint would exceed arm_server's path speed limit), then
 lift 100 mm -> travel in that locked horizontal plane to above B -> lower onto B's height.
 The travel keeps A's uprightness and takes only B's turn about vertical (hand-taught poses are never
 exactly upright, and the planner refuses tilt changes over 3 deg).
@@ -93,12 +93,13 @@ def plan_a_to_b(ep: dict) -> list[M.Path]:
 
 
 def recorded_segment(rec: FilePath, ep: dict, fps: float) -> tuple[list[dict[int, float]], float]:
-    """Commanded J1-J6 from the first frame that moves up to A, and a replay rate within the speed limit."""
+    """Commanded J1-J7 (gripper included) from the first frame that moves up to A, and a replay rate
+    within the arm's path speed limit."""
     rows = read_rows(rec)[: ep["A"]["frame"] + 1]
-    pts = [arm(joints(r)) for r in rows]
+    pts = [joints(r) for r in rows]
     first = next((i for i, q in enumerate(pts) if max(abs(q[m] - pts[0][m]) for m in q) > IDLE_DEG), len(pts) - 1)
     pts = pts[max(0, first - 1):]
-    worst = max((max(abs(b[m] - a[m]) for m in a) for a, b in zip(pts, pts[1:])), default=0.0)
+    worst = max((max(abs(b[m] - a[m]) for m in range(1, 7)) for a, b in zip(pts, pts[1:])), default=0.0)
     hz = fps if worst * fps <= REPLAY_MAX_DEG_S else REPLAY_MAX_DEG_S / worst
     return pts, hz
 
@@ -143,12 +144,12 @@ def main() -> None:
     try:
         client.current_joints()
         print("to the first recorded frame")
-        client._send({"op": "move", "joints": {str(m): v for m, v in seg[0].items()}, "speed": 15.0})
-        print("replaying rest -> A")
+        client._send({"op": "move", "joints": {str(m): v for m, v in arm(seg[0]).items()}, "speed": 15.0})
+        client._send({"op": "gripper", "target": seg[0][7], "speed": 30.0})
+        print("replaying rest -> A (arm + gripper)")
         st = client._send({"op": "path", "points": [{str(m): round(v, 3) for m, v in q.items()} for q in seg],
                            "hz": hz})
         print("  " + str(st.get("result")))
-        client._send({"op": "gripper", "target": ep["A"]["command"]["7"], "speed": 30.0})
         for p in moves:
             st = client.run(p)
             print("  " + str(st.get("result")))

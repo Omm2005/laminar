@@ -23,7 +23,7 @@ import sys
 import time
 
 from leader_arm import HERE, MAPPING, load_follower_zero
-from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus
+from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
@@ -36,6 +36,8 @@ HZ = 100.0
 GRIP_KP = 12.0           # N.m/rad, impedance gain on the gripper
 GRIP_DAMPING = 1.5       # MIT kd for the gripper
 GRIP_MOVE_TORQUE = 3.5   # torque limit for plain gripper moves (LeRobot RS default)
+VEL_FF_MAX = 3.0         # rad/s cap on the velocity feedforward
+VEL_FF_SMOOTH = 0.5      # low-pass on the feedforward (0..1, 1 = no smoothing)
 CONTACT_LAG_DEG = 6.0    # jaws lagging the closing target by this much ...
 CONTACT_VEL = 0.05       # ... while (nearly) stopped (rad/s) ...
 CONTACT_TIME = 0.3       # ... for this long = contact
@@ -68,6 +70,10 @@ def main():
     enabled = False
     cmd = {}
     grip = {"target": 0.0, "limit": GRIP_MOVE_TORQUE}
+    vff = {m: 0.0 for m in ids if m != GRIPPER}  # velocity feedforward per arm joint, rad/s
+    clock = {"t": time.perf_counter(), "next": time.perf_counter(), "prev": {}, "n": 0,
+             "t_rate": time.perf_counter(), "hz": None}
+    fine_timer()
     last = {"id": None, "op": None, "result": "starting"}
 
     def clamp(mid, deg):
@@ -87,7 +93,9 @@ def main():
                     tau = max(-grip["limit"], min(grip["limit"], GRIP_KP * (target - st["pos"])))
                 bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
             else:
-                bus.mit(mid, math.radians(zero[mid] + cmd[mid]), JOINTS[mid][1], JOINTS[mid][2])
+                # velocity feedforward: without it the kd term brakes against every planned motion
+                # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
+                bus.mit(mid, math.radians(zero[mid] + cmd[mid]), JOINTS[mid][1], JOINTS[mid][2], vel=vff[mid])
 
     def check():
         now = time.time()
@@ -109,6 +117,7 @@ def main():
             "command": {f"J{m}": round(cmd[m], 1) for m in ids if m != GRIPPER},
             "state": {f"J{m}": round(rel(m), 1) for m in ids if m in bus.state},
             "torque": {f"J{m}": round(bus.state[m]["torque"], 2) for m in ids if m in bus.state},
+            "loop_hz": clock["hz"],
             "max_temp_c": max((s["temp"] for s in bus.state.values()), default=None),
             "gripper": {"target": round(grip["target"], 1), "torque_limit": grip["limit"],
                         "pos": round(rel(GRIPPER), 1) if st7 else None,
@@ -126,9 +135,27 @@ def main():
                 time.sleep(0.002)
 
     def tick():
+        """One control step at a steady HZ: feedforward from how the command moved, send, check, then sleep
+        until the next deadline (not a flat dt, which drifts and jitters with the time spent sending)."""
+        now = time.perf_counter()
+        el = now - clock["t"]
+        if el > 0:
+            for m in vff:
+                v = math.radians(cmd[m] - clock["prev"].get(m, cmd[m])) / el
+                v = max(-VEL_FF_MAX, min(VEL_FF_MAX, v))
+                vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
+        clock["prev"], clock["t"] = dict(cmd), now
         send_all()
         check()
-        time.sleep(dt)
+        clock["next"] += dt
+        wait = clock["next"] - time.perf_counter()
+        if wait > 0:
+            time.sleep(wait)
+        elif wait < -dt:
+            clock["next"] = time.perf_counter()  # fell behind (e.g. USB stall): restart the schedule
+        clock["n"] += 1
+        if now - clock["t_rate"] >= 1.0:
+            clock["hz"], clock["n"], clock["t_rate"] = round(clock["n"] / (now - clock["t_rate"]), 1), 0, now
 
     def hold(seconds):
         end = time.time() + seconds
@@ -165,6 +192,9 @@ def main():
             if jump * hz > PATH_MAX_JOINT_SPEED:
                 return f"path refused: a step needs {jump * hz:.0f} deg/s (> {PATH_MAX_JOINT_SPEED:.0f})"
         pts = [{m: clamp(m, p.get(m, cmd[m])) for m in arm_ids} for p in points]
+        grips = [clamp(GRIPPER, p[GRIPPER]) for p in points] if all(GRIPPER in p for p in points) else None
+        if grips:
+            grip["limit"] = GRIP_MOVE_TORQUE
         duration = (len(pts) - 1) / hz
         t0 = time.time()
         t_status = 0.0
@@ -174,6 +204,8 @@ def main():
             f = x - i
             for m in arm_ids:
                 cmd[m] = pts[i][m] if len(pts) == 1 else pts[i][m] + (pts[i + 1][m] - pts[i][m]) * f
+            if grips:
+                grip["target"] = grips[i] if len(grips) == 1 else grips[i] + (grips[i + 1] - grips[i]) * f
             tick()
             if time.time() - t_status > 0.2:
                 t_status = time.time()
