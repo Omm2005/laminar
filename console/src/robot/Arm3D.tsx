@@ -211,12 +211,28 @@ function interpAt(samples: Telem[], t: number): number[] {
 
 /* -------------------------------------------------------------- scene parts */
 
+export type ChannelFill = {
+  number: number;
+  currentMl: number;
+  capacityMl: number;
+  contents?: string;
+};
+
 type ArmProps = {
   samples: Telem[];
   status: string;
   gripperDeg?: number;
   pourChannel?: number | null;
   cameraPreset?: "front" | "top" | "shoulder";
+  /** When the external vision model is pushing fresh samples, draw the reservoir + vial. */
+  vision?: {
+    live: boolean;
+    channels?: ChannelFill[];
+  };
+  /** True while the pour pipeline has the vial in the jaws (grasp..return_vial). */
+  vialInGripper?: boolean;
+  /** Vial contents label; used only to pick a liquid colour. */
+  vialColor?: string;
 };
 
 const PRESETS: Record<string, { pos: [number, number, number]; target: [number, number, number] }> = {
@@ -300,6 +316,124 @@ function VisionTarget({ pourChannel }: { pourChannel: number | null | undefined 
   );
 }
 
+/* ----- reservoir + vial, shown only when the external camera is streaming levels ----- */
+
+const CHANNEL_PITCH = 0.015;   // 15 mm trough-to-trough, matches our bench spec
+const TROUGH_W = 0.012;        // 12 mm along the pitch axis
+const TROUGH_L = 0.030;        // 30 mm along the arm's approach direction
+const TROUGH_H = 0.070;        // 70 mm deep
+const RESERVOIR_X = 0.25;      // 250 mm in front of the base
+const RESERVOIR_FRAME_PAD = 0.004;
+
+function Reservoir({ channels, highlight }: { channels: ChannelFill[]; highlight?: number | null }) {
+  // 12 troughs by default; use whatever the DB holds up to 12
+  const slots: (ChannelFill | null)[] = Array.from({ length: 12 }, (_, i) =>
+    channels.find((c) => c.number === i + 1) ?? null);
+  const totalW = 12 * CHANNEL_PITCH;
+  return (
+    <group position={[RESERVOIR_X, 0, 0]}>
+      {/* tray / frame */}
+      <mesh position={[0, 0.003, 0]} receiveShadow>
+        <boxGeometry args={[TROUGH_L + 2 * RESERVOIR_FRAME_PAD, 0.006, totalW + 2 * RESERVOIR_FRAME_PAD]} />
+        <meshStandardMaterial color="#2a3242" roughness={0.6} metalness={0.2} />
+      </mesh>
+      {slots.map((c, i) => {
+        const n = i + 1;
+        const y0 = -totalW / 2 + i * CHANNEL_PITCH + CHANNEL_PITCH / 2;
+        const curr = c ? c.currentMl : 0;
+        const cap = c?.capacityMl ?? 10;
+        const fillRatio = cap > 0 ? Math.max(0, Math.min(1, curr / cap)) : 0;
+        const fillH = fillRatio * (TROUGH_H - 0.004);
+        const isHi = highlight === n;
+        return (
+          <group key={n} position={[0, 0, y0]}>
+            {/* trough well: a hollow box, open at top */}
+            <mesh position={[0, TROUGH_H / 2 + 0.006, 0]} receiveShadow>
+              <boxGeometry args={[TROUGH_L, TROUGH_H, TROUGH_W]} />
+              <meshStandardMaterial color={isHi ? "#2a3a4e" : "#1b2130"}
+                roughness={0.7}
+                emissive={isHi ? "#4a9aff" : "#000000"} emissiveIntensity={isHi ? 0.08 : 0} />
+            </mesh>
+            {/* liquid: a shorter box inside */}
+            {fillH > 0.0005 && (
+              <mesh position={[0, 0.008 + fillH / 2, 0]}>
+                <boxGeometry args={[TROUGH_L * 0.9, fillH, TROUGH_W * 0.9]} />
+                <meshStandardMaterial
+                  color={c?.contents ? liquidColorFor(c.contents) : "#4a9aff"}
+                  transparent opacity={0.78} roughness={0.1} metalness={0.0} />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function liquidColorFor(contents: string): string {
+  const c = contents.toLowerCase();
+  if (c.includes("red")) return "#d94a4a";
+  if (c.includes("blue")) return "#4a9aff";
+  if (c.includes("green")) return "#68d391";
+  if (c.includes("yellow")) return "#e8c257";
+  return "#7dd3fc";
+}
+
+/** 15 mL Corning-style conical centrifuge tube: 17 mm OD, ~120 mm long with a conical bottom.
+ *  Rendered as a cylinder (cap+body) joined to a cone (tapered bottom). Translucent plastic. */
+function CentrifugeTube({ color = "#dde6f0" }: { color?: string }) {
+  const R = 0.0085;
+  const BODY_L = 0.090;     // straight part
+  const CONE_L = 0.030;     // tapered bottom
+  const CAP_L  = 0.006;     // cap height
+  // tube hangs along -y in local frame (jaws at top)
+  return (
+    <group>
+      {/* cap */}
+      <mesh position={[0, -CAP_L / 2, 0]} castShadow>
+        <cylinderGeometry args={[R + 0.0005, R + 0.0005, CAP_L, 20]} />
+        <meshStandardMaterial color="#dde6f0" roughness={0.4} metalness={0.1} />
+      </mesh>
+      {/* straight body */}
+      <mesh position={[0, -CAP_L - BODY_L / 2, 0]} castShadow>
+        <cylinderGeometry args={[R, R, BODY_L, 20, 1, true]} />
+        <meshPhysicalMaterial color={color} transmission={0.6} transparent opacity={0.6}
+          thickness={0.001} roughness={0.2} metalness={0.0} side={2} />
+      </mesh>
+      {/* conical tip */}
+      <mesh position={[0, -CAP_L - BODY_L - CONE_L / 2, 0]} castShadow>
+        <coneGeometry args={[R, CONE_L, 20, 1, true]} />
+        <meshPhysicalMaterial color={color} transmission={0.6} transparent opacity={0.6}
+          thickness={0.001} roughness={0.2} metalness={0.0} side={2} />
+      </mesh>
+    </group>
+  );
+}
+
+/** The tube rides with the gripper. Positions itself under gripper_end each frame. */
+function GrippedTube({ tipRef, color }: { tipRef: React.MutableRefObject<THREE.Object3D | null>; color?: string }) {
+  const groupRef = useRef<THREE.Group>(null!);
+  const _p = useMemo(() => new THREE.Vector3(), []);
+  const _q = useMemo(() => new THREE.Quaternion(), []);
+  useFrame(() => {
+    const tip = tipRef.current;
+    const g = groupRef.current;
+    if (!tip || !g) return;
+    tip.getWorldPosition(_p);
+    tip.getWorldQuaternion(_q);
+    g.position.copy(_p);
+    g.quaternion.copy(_q);
+  });
+  return (
+    <group ref={groupRef}>
+      {/* orient so the tube's local -y is along the gripper's approach axis */}
+      <group rotation={[Math.PI, 0, 0]} position={[0, 0.015, 0]}>
+        <CentrifugeTube color={color} />
+      </group>
+    </group>
+  );
+}
+
 function FpsMonitor({ onFps }: { onFps: (fps: number) => void }) {
   const frames = useRef(0);
   const t0 = useRef(0);
@@ -316,13 +450,17 @@ function FpsMonitor({ onFps }: { onFps: (fps: number) => void }) {
   return null;
 }
 
-function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset, onFps }: {
+function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset, onFps,
+                      vision, vialInGripper, vialColor }: {
   samplesRef: React.MutableRefObject<Telem[]>;
   status: string;
   gripperDeg: number;
   pourChannel: number | null | undefined;
   cameraPreset: "front" | "top" | "shoulder";
   onFps: (fps: number) => void;
+  vision?: { live: boolean; channels?: ChannelFill[] };
+  vialInGripper?: boolean;
+  vialColor?: string;
 }) {
   const [robot, setRobot] = useState<RobotHandle | null>(null);
   const tipRef = useRef<THREE.Object3D | null>(null);
@@ -374,7 +512,13 @@ function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset,
       <gridHelper args={[2.4, 24, "#263040", "#171d27"]} position={[0, 0.001, 0]} />
       <ContactShadows position={[0, 0, 0]} opacity={0.5} scale={1.8} blur={2.8} far={0.9} />
       <VisionTarget pourChannel={pourChannel} />
+      {vision?.live && (
+        <Reservoir channels={vision.channels ?? []} highlight={pourChannel ?? null} />
+      )}
       {robot && <primitive object={robot.root} />}
+      {robot && vision?.live && vialInGripper && (
+        <GrippedTube tipRef={tipRef} color={vialColor} />
+      )}
       {robot && <GripperTrail tipRef={tipRef} status={status} />}
       <OrbitControls makeDefault target={PRESETS[cameraPreset].target} enablePan={false} />
       <SyncCamera preset={cameraPreset} />
@@ -406,6 +550,9 @@ const Arm3D = memo(function Arm3D(props: ArmProps) {
           pourChannel={props.pourChannel ?? null}
           cameraPreset={props.cameraPreset ?? "front"}
           onFps={setFps}
+          vision={props.vision}
+          vialInGripper={props.vialInGripper}
+          vialColor={props.vialColor}
         />
         {highQuality && (
           <EffectComposer multisampling={0} enableNormalPass>

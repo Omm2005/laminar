@@ -20,6 +20,20 @@ function fmtAgo(ms: number): string {
   return s === 0 ? `${m} m ago` : `${m} m ${s} s ago`;
 }
 
+const VISION_LIVE_MS = 5000;
+const CARRYING_STEPS = new Set([
+  "grasp", "lift", "traverse", "lower", "adaptive_pour", "untilt", "return_vial",
+]);
+function liquidColorForContents(c?: string): string {
+  if (!c) return "#dde6f0";
+  const s = c.toLowerCase();
+  if (s.includes("red")) return "#d94a4a";
+  if (s.includes("blue")) return "#4a9aff";
+  if (s.includes("green")) return "#68d391";
+  if (s.includes("yellow")) return "#e8c257";
+  return "#dde6f0";
+}
+
 export default function Robot() {
   const jobs = useQuery(api.jobs.list, { limit: 1 });
   const activeJob = jobs?.[0] ?? null;
@@ -28,6 +42,9 @@ export default function Robot() {
     api.robot.levelsForJob,
     activeJob ? { jobId: activeJob._id, limit: 400 } : "skip",
   );
+  const latestLevel = useQuery(api.levels.latestAny, {});
+  const channels = useQuery(api.channels.list, {});
+  const vials = useQuery(api.vials.list, {});
 
   const buf = useRef<Telem[]>([]);
   const [, setBufTick] = useState(0);
@@ -73,6 +90,16 @@ export default function Robot() {
             gripperDeg={telem?.gripperDeg ?? 0}
             pourChannel={activeJob?.channel ?? null}
             cameraPreset={cameraPreset}
+            vision={{
+              live: !!(latestLevel && now - latestLevel.t < VISION_LIVE_MS),
+              channels: (channels ?? []).map((c) => ({
+                number: c.number, currentMl: c.currentMl, capacityMl: c.capacityMl, contents: c.contents,
+              })),
+            }}
+            vialInGripper={!!(activeJob?.currentStep && CARRYING_STEPS.has(activeJob.currentStep))}
+            vialColor={liquidColorForContents(
+              vials?.find((v) => v.slot === activeJob?.vial)?.contents,
+            )}
           />
         </div>
         {stale && (
