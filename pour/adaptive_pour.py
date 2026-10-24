@@ -109,7 +109,17 @@ def main():
     ap.add_argument("--level", default=default_backend(), choices=["auto", "manual", "opencv"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--yes", action="store_true", help="skip confirm before real move")
+    ap.add_argument("--convex-url", default=None, help="if set, push each 5 Hz level sample")
+    ap.add_argument("--job-id", default=None, help="Convex jobs id to tag levels with")
     args = ap.parse_args()
+
+    convex_client = None
+    if args.convex_url and args.job_id:
+        try:
+            from convex import ConvexClient  # type: ignore
+            convex_client = ConvexClient(args.convex_url)
+        except Exception as e:
+            print(f"[adaptive_pour] disabling level streaming ({e!r})")
 
     pose = f"channel_{args.channel}_pour"
     if pose not in POSES:
@@ -156,10 +166,29 @@ def main():
     # 3x the estimated time, bounded, as a hard timeout for manual (where level never updates)
     hard_timeout = max(10.0, 3 * (est_t if est_t == est_t else 6.0))
 
+    def _push_level(ml: float):
+        if not convex_client:
+            return
+        try:
+            convex_client.mutation("robot:pushLevels", {
+                "jobId": args.job_id,
+                "samples": [{"t": time.time() * 1000.0, "ml": float(ml), "channel": args.channel}],
+            })
+        except Exception as e:
+            print(f"[adaptive_pour] pushLevels failed, disabling: {e!r}")
+            # suppress further pushes this run
+            nonlocal_convex_disable[0] = True
+
+    nonlocal_convex_disable = [False]
+
     try:
+        # one sample at t0 so the chart has a baseline
+        _push_level(last_ml)
         while True:
             _drift_check(hold)
             cur_ml = lv.read()
+            if convex_client and not nonlocal_convex_disable[0]:
+                _push_level(cur_ml)
             poured = cur_ml - start_ml
             if poured >= args.target_ml - LEAD_ML:
                 end_reason = f"target reached ({poured:.2f} mL >= {args.target_ml:.2f} - {LEAD_ML:.2f})"

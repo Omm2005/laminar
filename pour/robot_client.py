@@ -128,7 +128,8 @@ class TelemetryPusher(threading.Thread):
             print(f"[telem] push error: {self._err!r}")
 
 
-def _step_command(step: dict, dry_run: bool, level: str) -> list[str]:
+def _step_command(step: dict, dry_run: bool, level: str,
+                  convex_url: str | None = None, job_id: str | None = None) -> list[str]:
     """Translate a plan step into the exact subprocess argv for run_task-style execution."""
     name = step["name"]
     a = step.get("args") or {}
@@ -142,9 +143,12 @@ def _step_command(step: dict, dry_run: bool, level: str) -> list[str]:
     if name == "lower":
         return ["primitives/lower.py"] + dry
     if name == "adaptive_pour":
+        extra = []
+        if convex_url and job_id:
+            extra = ["--convex-url", convex_url, "--job-id", job_id]
         return ["adaptive_pour.py", f"{float(a['targetMl'])}",
                 "--channel", str(int(a["channel"])),
-                "--level", level, "--yes"] + dry
+                "--level", level, "--yes"] + extra + dry
     if name == "untilt":
         return ["primitives/untilt.py"] + dry
     if name == "return_vial":
@@ -188,7 +192,8 @@ def run_job(convex: ConvexClient, job: dict, args: argparse.Namespace) -> None:
                                                    "currentStep": name})
 
             step_id = convex.mutation("steps:start", {"jobId": job_id, "name": name})
-            cmd = _step_command(step, args.dry_run, args.level)
+            cmd = _step_command(step, args.dry_run, args.level,
+                                convex_url=args.convex_url, job_id=job_id)
             print(f"  [{name}] {' '.join(cmd)}")
             try:
                 r = subprocess.run([str(VENV_PY)] + cmd, cwd=str(HERE),
@@ -249,6 +254,7 @@ def main():
     args = ap.parse_args()
 
     url = read_convex_url()
+    args.convex_url = url  # cached so adaptive_pour subprocesses can push levels back
     print(f"robot_client: convex @ {url}")
     convex = ConvexClient(url)
 
