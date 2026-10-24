@@ -3,16 +3,22 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 
+const EXAMPLES = [
+  "pour 2 ml into channel 3 from vial 1",
+  "pour 4 ml into channel 7",
+  "pour half of channel 2 from vial 1",
+  "pour quarter of channel 12 from vial 4",
+];
+
 export default function Jobs() {
   const jobs = useQuery(api.jobs.list, { limit: 30 });
   const submit = useMutation(api.requests.submit);
   const approve = useMutation(api.jobs.approve);
   const reject = useMutation(api.jobs.reject);
 
-  const [text, setText] = useState("pour 4 ml into channel 3 from vial 1");
+  const [text, setText] = useState(EXAMPLES[0]);
   const [who, setWho] = useState("hema");
   const [selected, setSelected] = useState<Id<"jobs"> | null>(null);
-
   const selectedJob = jobs?.find((j) => j._id === selected) ?? null;
 
   async function onSubmit() {
@@ -23,103 +29,134 @@ export default function Jobs() {
 
   return (
     <>
-      <div className="card">
-        <h2>Submit a pour</h2>
+      <section className="surface">
+        <div className="section-title">submit a pour</div>
         <textarea
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder='e.g. "pour half of channel 3 from vial 1"'
+          placeholder='e.g. "pour 2 ml into channel 3 from vial 1"'
         />
-        <div className="row" style={{ marginTop: 8, alignItems: "center" }}>
+        <div className="row" style={{ marginTop: 8 }}>
+          {EXAMPLES.map((ex) => (
+            <button key={ex} className="chip" onClick={() => setText(ex)}>{ex}</button>
+          ))}
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
           <input
-            style={{ maxWidth: 180 }}
+            style={{ maxWidth: 160 }}
             value={who}
             onChange={(e) => setWho(e.target.value)}
             placeholder="your name"
           />
-          <button className="primary" onClick={onSubmit}>Submit</button>
+          <button className="btn-primary" onClick={onSubmit}>Submit</button>
         </div>
-      </div>
+      </section>
 
-      <div className="row">
-        <div className="col" style={{ flex: "2 1 420px" }}>
-          <div className="card">
-            <h2>Recent jobs</h2>
-            {!jobs ? <p className="mono">loading…</p>
-              : jobs.length === 0 ? <p className="mono">no jobs yet</p>
-                : (
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>when</th><th>request</th><th>→</th><th>status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {jobs.map((j) => (
-                        <tr
-                          key={j._id}
-                          style={{
-                            cursor: "pointer",
-                            background: selected === j._id ? "rgba(125,211,252,0.08)" : undefined,
-                          }}
-                          onClick={() => setSelected(j._id)}
-                        >
-                          <td className="mono">{fmtAgo(j.createdAt)}</td>
-                          <td>{j.requestText}</td>
-                          <td className="mono">
-                            {j.targetMl > 0 ? `${j.targetMl.toFixed(1)} mL → ch${j.channel} / v${j.vial}` : "—"}
-                          </td>
-                          <td><span className={`pill ${j.status}`}>{j.status}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-          </div>
-        </div>
+      <div className="live-grid">
+        <section className="surface">
+          <div className="section-title">recent jobs</div>
+          {!jobs ? <div className="small dim">loading…</div>
+            : jobs.length === 0 ? <div className="small dim">no jobs yet — submit one above</div>
+              : (
+                <ul className="jobs-list">
+                  {jobs.map((j) => (
+                    <li key={j._id}
+                        className={selected === j._id ? "selected" : ""}
+                        onClick={() => setSelected(j._id)}>
+                      <div className="jobs-row-top">
+                        <span className="mono small">{fmtAgo(j.createdAt)}</span>
+                        <span className={`pill ${j.status}`}>{j.status.replace("_"," ")}</span>
+                      </div>
+                      <div className="jobs-row-body">{j.requestText}</div>
+                      {j.targetMl > 0 && (
+                        <div className="small dim mono">
+                          {j.targetMl.toFixed(1)} mL → channel {j.channel} / vial {j.vial}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+        </section>
 
-        <div className="col" style={{ flex: "1 1 320px" }}>
-          <div className="card">
-            <h2>Plan</h2>
-            {!selectedJob ? <p className="mono">select a job to see its plan</p> : (
-              <>
-                <p className="mono">{selectedJob.requestText}</p>
-                <p className="mono">
-                  status: <span className={`pill ${selectedJob.status}`}>{selectedJob.status}</span>
-                  {selectedJob.approvedBy ? ` · approved by ${selectedJob.approvedBy}` : ""}
-                </p>
-                {selectedJob.failReason && (
-                  <p style={{ color: "var(--danger)" }}>{selectedJob.failReason}</p>
-                )}
-                {selectedJob.plan && selectedJob.plan.length > 0 ? (
-                  <ol style={{ paddingLeft: 18, margin: "8px 0" }}>
-                    {selectedJob.plan.map((s, i) => (
-                      <li key={i}>
-                        <code>{s.name}</code>
-                        {s.args && Object.keys(s.args as object).length > 0 && (
-                          <span className="mono"> {JSON.stringify(s.args)}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="mono">no plan yet</p>
-                )}
-                {selectedJob.status === "awaiting_approval" && (
-                  <div className="row" style={{ marginTop: 10 }}>
-                    <button className="primary" onClick={() =>
-                      approve({ jobId: selectedJob._id, approvedBy: who })}>Approve</button>
-                    <button className="ghost" onClick={() =>
-                      reject({ jobId: selectedJob._id, approvedBy: who, reason: "rejected from console" })}>Reject</button>
-                  </div>
-                )}
-              </>
+        <aside className="live-side">
+          <section className="surface">
+            <div className="section-title">plan</div>
+            {!selectedJob ? (
+              <div className="small dim">select a job to see its live stepper</div>
+            ) : (
+              <PlanStepper
+                jobId={selectedJob._id}
+                plan={selectedJob.plan ?? []}
+                status={selectedJob.status}
+                currentStep={selectedJob.currentStep}
+              />
             )}
-          </div>
-        </div>
+          </section>
+          {selectedJob?.status === "awaiting_approval" && (
+            <section className="surface">
+              <div className="section-title">approval</div>
+              <div className="row">
+                <button className="btn-primary" onClick={() => approve({ jobId: selectedJob._id, approvedBy: who })}>Approve</button>
+                <button className="btn-ghost" onClick={() => reject({ jobId: selectedJob._id, approvedBy: who, reason: "rejected from console" })}>Reject</button>
+              </div>
+            </section>
+          )}
+          {selectedJob?.failReason && (
+            <section className="surface">
+              <div className="section-title">failure</div>
+              <div className="small" style={{ color: "var(--bad)" }}>{selectedJob.failReason}</div>
+            </section>
+          )}
+        </aside>
       </div>
     </>
+  );
+}
+
+function PlanStepper({ jobId, plan, status, currentStep }: {
+  jobId: Id<"jobs">;
+  plan: { name: string; args?: unknown }[];
+  status: string;
+  currentStep?: string;
+}) {
+  const steps = useQuery(api.steps.forJob, { jobId });
+  if (!plan.length) {
+    return <div className="small dim">planner is still working…</div>;
+  }
+  // Map planned step index -> most recent step row of that name (if any)
+  const stepRowsByName = new Map<string, { ok?: boolean; reason?: string }>();
+  for (const s of steps ?? []) {
+    stepRowsByName.set(s.name, { ok: s.ok, reason: s.reason });
+  }
+  return (
+    <ol className="stepper">
+      {plan.map((p, i) => {
+        const row = stepRowsByName.get(p.name);
+        const isCurrent = currentStep === p.name;
+        let state: "pending" | "current" | "done" | "fail" = "pending";
+        if (row?.ok === true) state = "done";
+        else if (row?.ok === false) state = "fail";
+        else if (isCurrent) state = "current";
+        else if (status === "done") state = "done";
+        return (
+          <li key={i} className={`step step-${state}`}>
+            <span className="step-dot" />
+            <div>
+              <div><code>{p.name}</code>
+                {p.args && Object.keys(p.args as Record<string, unknown>).length > 0 ? (
+                  <span className="small dim mono"> {JSON.stringify(p.args)}</span>
+                ) : null}
+              </div>
+              {row?.reason && (
+                <div className="small" style={{ color: "var(--bad)" }}>{row.reason}</div>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
