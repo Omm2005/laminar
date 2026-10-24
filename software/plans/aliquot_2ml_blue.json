@@ -1,0 +1,12 @@
+{
+  "plan_id": "example-blue-2ml",
+  "request": "Aliquot 2 mL of blue into tube 1",
+  "steps": [
+    {"skill": "pick",   "args": {"vial_id": "V1"}},
+    {"skill": "carry",  "args": {"to": "station"}},
+    {"skill": "pour",   "args": {"target": "tube1", "ml": 2.0, "liquid": "blue"}},
+    {"skill": "verify", "args": {"target": "tube1", "expect_ml": 2.0, "tol": 0.2}},
+    {"skill": "carry",  "args": {"to": "rack"}},
+    {"skill": "place",  "args": {"vial_id": "V1", "slot": "A"}}
+  ]
+}
