@@ -38,6 +38,12 @@ GRIP_DAMPING = 1.5       # MIT kd for the gripper
 GRIP_MOVE_TORQUE = 3.5   # torque limit for plain gripper moves (LeRobot RS default)
 VEL_FF_MAX = 3.0         # rad/s cap on the velocity feedforward
 VEL_FF_SMOOTH = 0.5      # low-pass on the feedforward (0..1, 1 = no smoothing)
+# The base (J1, RS06) at the default kp 50 sticks and slips on slow planned moves (~1 deg sawtooth, ~1 Hz,
+# measured on the A->B travel): its friction is ~1 N.m (it parks 1.1 deg short). Stiffer gains, plus a
+# Coulomb friction feedforward kept below the friction itself so it can never drive the joint on its own.
+GAIN_OVERRIDE = {1: (120.0, 5.0)}   # mid: (kp, kd) used by arm_server instead of robstride_can.JOINTS
+FRICTION_FF_NM = {1: 0.6}           # mid: N.m pushed in the direction of planned motion
+FRICTION_FF_VEL = 0.02              # rad/s where the friction feedforward reaches ~76 % (tanh)
 CONTACT_LAG_DEG = 6.0    # jaws lagging the closing target by this much ...
 CONTACT_VEL = 0.05       # ... while (nearly) stopped (rad/s) ...
 CONTACT_TIME = 0.3       # ... for this long = contact
@@ -95,7 +101,9 @@ def main():
             else:
                 # velocity feedforward: without it the kd term brakes against every planned motion
                 # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
-                bus.mit(mid, math.radians(zero[mid] + cmd[mid]), JOINTS[mid][1], JOINTS[mid][2], vel=vff[mid])
+                kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
+                tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL)
+                bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
 
     def check():
         now = time.time()
