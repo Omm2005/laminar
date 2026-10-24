@@ -90,3 +90,127 @@ class FakeJoint(Joint):
 
     def close(self) -> None:
         pass
+
+
+class RobStrideJoint(Joint):
+    """One joint through the team's candleLight driver (robotics/robstride_can.py), MIT position control.
+
+    Positions are rad relative to the calibrated zero in robotics/follower_calibration.json.
+    Only this motor is enabled. A 100 Hz thread moves the setpoint toward the target at the
+    requested speed and streams it. Lost feedback (250 ms), a motor fault or > 80 C disables it.
+    """
+
+    FEEDBACK_TIMEOUT = 0.25
+    TEMP_LIMIT_C = 80.0
+
+    def __init__(self, motor_id: int = 6, hz: float = 100.0, **_):
+        super().__init__(motor_id=motor_id)
+        self.hz = hz
+        self.error: str | None = None
+        self.bus = None
+        self._thread = None
+        self._running = False
+
+    def connect(self) -> None:
+        import math
+        import sys
+        import threading
+
+        from .telemetry import REPO_ROOT
+        sys.path.insert(0, str(REPO_ROOT / "robotics"))
+        import macos_usb
+        macos_usb.patch()
+        from leader_arm import load_follower_zero
+        from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus
+
+        mid = self.motor_id
+        _, self.kp, self.kd, lo_deg, hi_deg = JOINTS[mid]
+        self.lo, self.hi = math.radians(lo_deg), math.radians(hi_deg)
+        if mid == 6:  # wrist roll: same +-90 deg soft limit as robotics/arm_server.py (camera cable)
+            self.lo, self.hi = max(self.lo, -math.pi / 2), min(self.hi, math.pi / 2)
+        zero = load_follower_zero()[mid]
+        self.bus = RobStrideBus()
+        self.bus.drain(0.1)
+        raw = self.bus.read_param_f32(mid, P_MECH_POS, timeout=0.1)
+        if raw is None:
+            self.bus.close()
+            self.bus = None
+            raise RuntimeError(f"J{mid} did not respond - is the arm powered and on the CAN bus?")
+        deg = math.degrees(raw)
+        zero += 360.0 * round((deg - zero) / 360.0)  # single-turn wrap after power-up
+        self.zero_rad = math.radians(zero)
+        self._cmd = self._target = raw - self.zero_rad
+        self._v = self.vlim
+
+        self.bus.disable(mid)
+        self.bus.write_param_u8(mid, P_RUN_MODE, 0)  # MIT mode
+        time.sleep(0.05)
+        self.bus.enable(mid)
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, name=f"J{mid}", daemon=True)
+        self._thread.start()
+        time.sleep(0.3)  # hold where it is before anything moves
+        if self.error:
+            raise RuntimeError(self.error)
+
+    def _loop(self) -> None:
+        dt = 1.0 / self.hz
+        mid = self.motor_id
+        started = last = time.time()
+        while self._running:
+            now = time.time()
+            elapsed, last = now - last, now  # real loop time: USB sends make it longer than dt
+            d = self._target - self._cmd
+            step = self._v * min(elapsed, 0.05)  # cap so a stalled loop never jumps the target
+            self._cmd += max(-step, min(step, d))
+            self.bus.mit(mid, self.zero_rad + self._cmd, self.kp, self.kd)
+            st = self.bus.state.get(mid)
+            now = time.time()
+            why = None
+            if st is None:
+                if now - started > self.FEEDBACK_TIMEOUT:
+                    why = f"no feedback from J{mid}"
+            elif now - st["t"] > self.FEEDBACK_TIMEOUT:
+                why = f"lost feedback from J{mid}"
+            elif st["fault"]:
+                why = f"J{mid} fault 0x{st['fault']:02x}"
+            elif st["temp"] > self.TEMP_LIMIT_C:
+                why = f"J{mid} temperature {st['temp']:.0f} C"
+            if why:
+                self.error = why
+                self._running = False
+                self.bus.disable(mid)
+                return
+            time.sleep(dt)
+
+    def _check(self) -> None:
+        if self.error:
+            raise RuntimeError(f"motor stopped: {self.error}")
+
+    def state(self):
+        st = self.bus.state.get(self.motor_id) if self.bus else None
+        if not st:
+            return None
+        return {"pos_rad": round(st["pos"] - self.zero_rad, 4), "vel": round(st["vel"], 3),
+                "torque": round(st["torque"], 3), "temp_c": st["temp"], "fault": st["fault"]}
+
+    def position(self) -> float | None:
+        st = self.bus.state.get(self.motor_id) if self.bus else None
+        return None if not st else st["pos"] - self.zero_rad
+
+    def move_to(self, pos: float, vlim: float | None = None) -> None:
+        self._check()
+        if not self.lo <= pos <= self.hi:
+            raise ValueError(f"joint{self.motor_id} target {pos:.3f} rad outside [{self.lo:.2f}, {self.hi:.2f}]")
+        self._v = vlim or self.vlim
+        self._target = pos
+
+    def close(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+        if self.bus:
+            try:
+                self.bus.disable(self.motor_id)
+            finally:
+                self.bus.close()

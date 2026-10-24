@@ -5,3 +5,8 @@ __pycache__/
 .DS_Store
 .env
 logs/
+software/level_calib_sim.json
+software/level_ref_sim.png
+sense/level_calib.json
+sense/level_ref.png
+sense/level_boxes.png
