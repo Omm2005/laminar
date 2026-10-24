@@ -24,6 +24,7 @@ import time
 
 from leader_arm import HERE, MAPPING, load_follower_zero
 from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
+import joint_state  # console bridge: 10 Hz joint_state.json writer, no-op if too soon
 
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
@@ -146,6 +147,7 @@ def main():
                 vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
         clock["prev"], clock["t"] = dict(cmd), now
         send_all()
+        joint_state.write([cmd[m] for m in range(1, 7)])  # console bridge, rate-limited to 10 Hz
         check()
         clock["next"] += dt
         wait = clock["next"] - time.perf_counter()

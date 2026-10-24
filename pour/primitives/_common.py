@@ -13,7 +13,8 @@ import yaml
 PRIM_DIR = Path(__file__).resolve().parent
 POUR_DIR = PRIM_DIR.parent
 LAMINAR = POUR_DIR.parent
-TELEOP = LAMINAR / "teleop"
+# post-merge: kinematics now lives in robotics/ (used to be teleop/).
+TELEOP = LAMINAR / "robotics"
 for p in (str(POUR_DIR), str(TELEOP)):
     if p not in sys.path:
         sys.path.insert(0, p)

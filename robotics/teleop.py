@@ -19,6 +19,7 @@ import time
 from leader_arm import HERE, LEADER_CAL_FILE, MAPPING, LeaderArm, load_follower_zero
 from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 from recorder import Camera, Recorder
+import joint_state  # console bridge: 10 Hz joint_state.json writer, no-op if too soon
 
 try:
     import msvcrt
@@ -200,6 +201,7 @@ def main():
                 step = args.max_speed * elapsed * (6.0 if m == GRIPPER else 1.0)  # gripper travels 6x the leader angle
                 cmd[m] += max(-step, min(step, goal[m] - cmd[m]))
             send_all()
+            joint_state.write([cmd[m] for m in range(1, 7)])  # console bridge, rate-limited to 10 Hz
             check_follower()
             loops += 1
             now = time.time()

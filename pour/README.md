@@ -1,6 +1,15 @@
-# pour/
+# pour/  (LEGACY — fallback only)
 
-Hard-coded pick-carry-pour on the reBot B601-RS, driven by `teleop/arm_server.py`.
+> **Not the canonical robot pipeline anymore.** The team's canonical pouring code lives in
+> `robotics/` (`arm_server.py` + `arm_client.py` + `motion.py` + `transfer.py`) and the console
+> drives it via `console/bridge/run_job.py`. Keep `pour/` as a working fallback for the hard-coded
+> pick-carry-pour (useful when `transfer.py` isn't set up for a given vial/channel), but any new
+> work should go into `robotics/` or `console/bridge/`.
+
+Hard-coded pick-carry-pour on the reBot B601-RS, driven by `robotics/arm_server.py`
+(after the upstream merge). `pour/arm_io.py` and `pour/primitives/_common.py` were repointed
+from `teleop/` to `robotics/`; the arm_cmd.json / arm_status.json / kinematics contract is
+the same, so all primitives + `run_task.py` keep working.
 Nothing in here learns from recordings; every pose and every pour parameter is in a YAML file
 that you fill in by hand. The only closed-loop signal is the external level camera.
 

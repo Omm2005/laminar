@@ -11,7 +11,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent              # pour/
 LAMINAR = HERE.parent
-TELEOP = LAMINAR / "teleop"
+# post-merge: canonical arm code lives in robotics/ (used to be teleop/).
+# pour/ now talks to robotics/arm_server.py over the same arm_cmd.json / arm_status.json contract.
+TELEOP = LAMINAR / "robotics"
 VENV_PY = LAMINAR / ".venv" / "Scripts" / "python.exe"
 CMD_FILE = TELEOP / "arm_cmd.json"
 STATUS_FILE = TELEOP / "arm_status.json"
