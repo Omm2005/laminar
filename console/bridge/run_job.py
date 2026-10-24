@@ -10,10 +10,11 @@ Convex job fields consumed:
     jobId      (jobs._id)
     vial       (number 1..) -> "vial_A", "vial_B", ...
     channel    (number 1..) -> "well_1", "well_2", ... (via layout.yaml.pour.columns)
-    targetMl   (number)      -> --target as a fraction of channel capacity (assumed 10 mL)
+    targetMl   (number)      -> mL to ADD to the channel (CameraPour.pour_ml: current level + targetMl,
+                                using the camera calibration's capacity_ml)
 
 Usage:
-    python console/bridge/run_job.py [--once] [--poll 2] [--dry-run] [--cam 0]
+    python console/bridge/run_job.py --cam 0 [--once] [--poll 2] [--dry-run] [--no-pour]
                                        [--calib ../sense/level_calib.json]
 """
 from __future__ import annotations
@@ -44,7 +45,6 @@ from transfer import (                                       # noqa: E402
 )
 
 ENV_FILE = LAMINAR / "console" / ".env.local"
-CHANNEL_CAPACITY_ML = 10.0  # transfer's --target is a fraction; convert from targetMl
 
 
 def read_convex_url() -> str:
@@ -146,7 +146,6 @@ def run_one_job(convex: ConvexClient, job: dict, a: argparse.Namespace) -> None:
     lower_mm = float(layout.get("lower_mm", 60))
     direction = pour_direction(cfg)
     column = camera_column(cfg, comp)
-    target_frac = max(0.05, min(1.0, target_ml / CHANNEL_CAPACITY_ML))
 
     client = ArmClient(dry_run=a.dry_run)
     try:
@@ -167,6 +166,12 @@ def run_one_job(convex: ConvexClient, job: dict, a: argparse.Namespace) -> None:
     if roll_room_deg(roll, direction) < 20 and not a.dry_run:
         hooks.set_status("failed")
         hooks.event("error", "insufficient wrist-roll clearance; re-grab with roll near 0")
+        return
+
+    # without a camera there is no pour: refuse rather than carry the vial out and back and call it done
+    if a.cam is None and not a.no_pour and not a.dry_run:
+        hooks.set_status("failed")
+        hooks.event("error", "no side camera: start run_job with --cam <index> (or --no-pour for moves only)")
         return
 
     # open the camera BEFORE any motion so a bad camera never strands the tube
@@ -203,20 +208,24 @@ def run_one_job(convex: ConvexClient, job: dict, a: argparse.Namespace) -> None:
             hooks.set_status("pouring", "pour")
             r = None
             try:
-                r = camera.pour(direction, target_frac, 85.0, view=False)
+                # pour targetMl MORE on top of what the channel holds; refuses overfill / unreadable column
+                r, added_ml = camera.pour_ml(direction, target_ml, 85.0, view=False)
             except Exception as e:
                 hooks.step_end(step_id, False, str(e))
                 hooks.event("error", f"pour: {e}")
-                overall_ok = False
+                overall_ok, end_status = False, "failed"
             else:
-                hooks.step_end(step_id, bool(r.ok), r.reason)
+                # a pour that did not finish (not started, aborted) never tilted or stopped early: say why
+                hooks.step_end(step_id, bool(r.ok), f"{r.result}: {r.reason}")
+                if not r.ok:
+                    hooks.event("error", f"pour {r.result} at {r.max_tilt_deg:.0f} deg tilt: {r.reason}")
+                    overall_ok, end_status = False, "failed"
                 try:
-                    poured_ml = (r.final_fill or 0.0) * CHANNEL_CAPACITY_ML
                     hooks.pour_record(
-                        target_ml=target_ml, poured_ml=poured_ml,
-                        onset_deg=getattr(r, "onset_deg", 0.0),
-                        pour_deg=getattr(r, "max_tilt_deg", 0.0),
-                        mlPerS=0.0,
+                        target_ml=target_ml, poured_ml=added_ml or 0.0,
+                        onset_deg=0.0,                     # PourResult has no onset angle
+                        pour_deg=r.max_tilt_deg,
+                        mlPerS=(added_ml or 0.0) / r.duration_s if r.duration_s else 0.0,
                     )
                 except Exception as e:
                     hooks.event("warn", f"pour_record skipped: {e}")
@@ -256,7 +265,8 @@ def main() -> None:
     ap.add_argument("--poll", type=float, default=2.0)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="plan only; arm_server optional")
-    ap.add_argument("--cam", default=None, help="side-camera index for the pour; omit to skip camera pour")
+    ap.add_argument("--cam", default=None, help="side-camera index for the pour (required unless --no-pour)")
+    ap.add_argument("--no-pour", action="store_true", help="run the moves only, no pour (jobs report no pour)")
     ap.add_argument("--calib", default=str(LAMINAR / "sense" / "level_calib.json"))
     a = ap.parse_args()
 
