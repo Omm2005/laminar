@@ -1,0 +1,8 @@
+# device-specific calibration, recordings and runtime files stay local (not committed)
+*_calibration.json
+recordings/
+arm_cmd.json
+arm_status.json
+*.tmp
+STOP
+__pycache__/

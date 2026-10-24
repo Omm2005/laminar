@@ -1,0 +1,7 @@
+python-can>=4.6
+gs_usb
+pyusb
+libusb-package
+motorbridge-smart-servo
+opencv-python
+numpy
