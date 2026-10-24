@@ -36,10 +36,11 @@ The candleLight adapter enumerates with WinUSB on Windows; `libusb-package` prov
 | `leader_arm.py` | Leader reader + leader→follower joint mapping (directions, gripper ×6, limits). |
 | `recorder.py` | Camera grabber thread + fixed-rate recorder (video.mp4, data.csv, meta.json). |
 | `rest_arm.py` | Eases the follower from wherever it is (enabled or not) to its zero pose, then disables. |
-| `arm_server.py` | Holds the follower and runs one command at a time from `arm_cmd.json` (move / gripper / grasp-until-contact / rest), writing `arm_status.json`. For scripted or agent control. |
+| `arm_server.py` | Holds the follower and runs one command at a time from `arm_cmd.json` (move / gripper / grasp-until-contact / rest), writing `arm_status.json`. `--hold-grip` keeps squeezing an object held at startup. For scripted or agent control. |
 | `arm_cmd.py` | CLI for `arm_server.py`: `python arm_cmd.py move 1=-20 2=65`, `grasp`, `gripper 78`, `rest`, `status`. |
 | `kinematics.py` | Forward kinematics from the vendor URDF (`model/rebot_b601_rs.urdf`) in the follower's joint frame. |
 | `snap.py` | Grabs one frame from the wrist camera. |
+| `move_tool.py` | Straight-line tool moves via IK through `arm_server.py`: `--fwd/--left/--up` metres, orientation held. |
 
 ### Calibrate (both arms in the zero pose, grippers closed)
 

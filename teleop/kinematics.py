@@ -73,3 +73,39 @@ if __name__ == "__main__":
         "scan pose J1=-15": {1: -15, 2: 47, 3: 0, 4: 40, 5: 2, 6: -7},
     }.items():
         print(f"{label:28s} {describe(q)}")
+
+
+def _pose_err(q, p_goal, R_goal):
+    p, R = fk(q)
+    dR = R_goal @ R.T
+    w = 0.5 * np.array([dR[2, 1] - dR[1, 2], dR[0, 2] - dR[2, 0], dR[1, 0] - dR[0, 1]])
+    return np.concatenate([p_goal - p, w])
+
+
+def ik(q_start, p_goal, R_goal, limits=None, iters=200):
+    """Damped least-squares IK for the 6 arm joints. q in degrees {1..6}; returns (q, position error m)."""
+    q = np.array([q_start[i] for i in range(1, 7)], dtype=float)
+    for _ in range(iters):
+        qd = {i + 1: q[i] for i in range(6)}
+        e = _pose_err(qd, p_goal, R_goal)
+        if np.linalg.norm(e[:3]) < 2e-4 and np.linalg.norm(e[3:]) < 2e-3:
+            break
+        J = np.zeros((6, 6))
+        for i in range(6):
+            dq = dict(qd)
+            dq[i + 1] += 0.01
+            J[:, i] = -(_pose_err(dq, p_goal, R_goal) - e) / np.radians(0.01)
+        step = J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(6), e)
+        q += np.degrees(np.clip(step, -0.1, 0.1))
+        if limits:
+            for i in range(6):
+                lo, hi = limits[i + 1]
+                q[i] = min(hi, max(lo, q[i]))
+    qd = {i + 1: float(q[i]) for i in range(6)}
+    return qd, float(np.linalg.norm(_pose_err(qd, p_goal, R_goal)[:3]))
+
+
+def offset_pose(q, dx=0.0, dy=0.0, dz=0.0, limits=None):
+    """Joint angles that move the tool by (dx, dy, dz) m in the base frame, keeping its orientation."""
+    p, R = fk(q)
+    return ik(q, p + np.array([dx, dy, dz]), R, limits)

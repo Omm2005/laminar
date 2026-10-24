@@ -65,7 +65,10 @@ class RobStrideBus:
     def __init__(self, bitrate=1_000_000):
         self.bus = can.Bus(interface="gs_usb", channel=0, index=0, bitrate=bitrate)
         self.state = {}  # motor_id -> dict(pos, vel, torque, temp, fault, mode, t)
-        # gs_usb recv() costs ~14 ms when nothing is waiting on Windows, so receive on a background thread
+        # gs_usb recv() costs ~14 ms when nothing is waiting on Windows, so receive on a background thread.
+        # Reads and writes never overlap: concurrent USB transfers coincided with the adapter wedging
+        # (USB I/O error, then no TX at all until replugged).
+        self._usb_lock = threading.Lock()
         self._rx = queue.Queue()
         self._running = True
         self._thread = threading.Thread(target=self._rx_loop, daemon=True)
@@ -74,7 +77,8 @@ class RobStrideBus:
     def _rx_loop(self):
         while self._running:
             try:
-                msg = self.bus.recv(0.05)
+                with self._usb_lock:
+                    msg = self.bus.recv(0.001)
             except Exception:
                 if not self._running:
                     return
@@ -83,6 +87,8 @@ class RobStrideBus:
                 r = self._handle(msg)
                 if r and r[0] != T_FEEDBACK:
                     self._rx.put(r)
+            else:
+                time.sleep(0.0005)  # let a waiting sender take the lock
 
     def close(self):
         self._running = False
@@ -91,7 +97,8 @@ class RobStrideBus:
 
     def _send(self, comm_type, data2, motor_id, data=b"\x00" * 8):
         arb = (comm_type << 24) | ((data2 & 0xFFFF) << 8) | motor_id
-        self.bus.send(can.Message(arbitration_id=arb, data=data, is_extended_id=True))
+        with self._usb_lock:
+            self.bus.send(can.Message(arbitration_id=arb, data=data, is_extended_id=True))
 
     def _handle(self, msg):
         """Decode one frame; returns (comm_type, motor_id, msg)."""

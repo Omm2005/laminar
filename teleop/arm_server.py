@@ -9,7 +9,8 @@ Command file (write atomically; a new "id" triggers execution). Angles are degre
 Status is written to arm_status.json after every command and ~5x per second while busy.
 Creating a file named STOP also returns to rest and exits.
 
-Usage:  python arm_server.py
+Usage:  python arm_server.py [--hold-grip]   (--hold-grip: the gripper is holding an object at startup;
+        keep squeezing it lightly instead of relaxing the jaws)
 """
 import json
 import math
@@ -46,6 +47,11 @@ def smoothstep(s):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--hold-grip", action="store_true")
+    ap.add_argument("--hold-torque", type=float, default=1.0)
+    args = ap.parse_args()
     zero = load_follower_zero()
     ids = list(JOINTS)
     dt = 1.0 / HZ
@@ -199,6 +205,9 @@ def main():
             zero[mid] += 360.0 * round((deg - zero[mid]) / 360.0)  # single-turn wrap after power-up
             cmd[mid] = deg - zero[mid]
         grip["target"] = cmd.pop(GRIPPER)
+        if args.hold_grip:
+            grip["target"] -= GRASP_SQUEEZE_DEG
+            grip["limit"] = args.hold_torque
         for mid in ids:
             bus.disable(mid)
             bus.write_param_u8(mid, P_RUN_MODE, 0)
@@ -272,17 +281,23 @@ def main():
         except BaseException as e:
             print(f"return to rest aborted: {e!r}", flush=True)
         if enabled:
+            failed = []
             for mid in ids:
                 try:
                     bus.disable(mid)
                 except Exception:
-                    print(f"WARNING: could not disable J{mid}", flush=True)
-            last["result"] = (last.get("result") or "") + " | at rest, motors disabled"
+                    failed.append(mid)
+            if failed:
+                msg = (f"COULD NOT DISABLE {failed} - motors still holding their last command. "
+                       "Replug the CAN adapter and run rest_arm.py (support the arm before cutting power).")
+            else:
+                msg = "at rest, motors disabled"
+            last["result"] = (last.get("result") or "") + " | " + msg
             try:
                 write_status()
             except Exception:
                 pass
-            print("motors disabled", flush=True)
+            print(msg, flush=True)
         bus.close()
         STOP_FILE.unlink(missing_ok=True)
 
