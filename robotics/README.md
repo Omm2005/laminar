@@ -12,29 +12,33 @@ The only bench measurements are the 2-D distances from each vial to each compart
 ### Vial â†’ compartment â†’ vial in one command: `transfer.py`
 
 ```
+cd software && python -m laminar.pour_motor6 calibrate --cam 2   # once: side camera, column boxes, % marks
 cd robotics
 python transfer.py vial_A well_2                              # plan the six moves and print them
-python transfer.py vial_A well_2 --ml 2 --liquid blue --run   # run, camera-driven pour
-python transfer.py vial_A well_2 --pour fixed --tilt 80 --hold 3 --run   # no camera yet: fixed tilt
+python transfer.py vial_A well_2 --cam 2 --run                # run, camera pour to 90 % of full
+python transfer.py vial_A well_2 --pour fixed --tilt 80 --hold 3 --run   # no camera: fixed tilt
 ```
 
-All six moves are planned (and safety-checked) before anything moves, and each is played continuously.
-The pour is Om's `PourController` (`software/laminar/pour.py`) reading PourFrame JSON on UDP 5555 and
-streaming the wrist roll live through arm_server's `tilt_stream` op; if those updates stop for 0.5 s
-arm_server tilts the tube back upright on its own. The roll never goes past its soft limit (Â±90Â°): the
-controller's `max_tilt` is capped to the room left from the current roll angle. `pour.direction` in
-`layout.yaml` sets which way the roll tips the lip toward the compartment. The return trip starts from the
-pour-ready pose (roll back at its base angle) and ends where the grab ended, within 1 mm.
+All six moves are planned (and safety-checked), and the camera calibration and camera are checked, before
+anything moves; each move is played continuously. The pour is Om's `pour_right` / `pour_left`
+(`software/laminar/pour_motor6.py`): it fills the compartment's camera column (`pour.columns` in
+`layout.yaml`) to `--target` of full, slowing as it fills, and tilts back upright when done or on wrong
+column, overfill, camera lost or no flow. It streams the wrist roll through arm_server's `tilt_stream` op
+with a heartbeat; if updates stop for 0.5 s arm_server tilts the tube back upright on its own. The roll
+never goes past its soft limit (±90°), and the plan refuses a pour with under 20° of roll room.
+`pour.direction` in `layout.yaml` (or `--side`) sets which way the roll tips the lip toward the
+compartment. After any pour result the tube is carried back; only an arm error stops it where it is.
+The return trip ends where the grab ended, within 1 mm.
 
 | File | What it does |
 | --- | --- |
 | `motion.py` | Plans straight-line moves with IK: `plan_lift`, `plan_lower`, `plan_shift`, `plan_travel`, `plan_transfer` / `plan_return`, `plan_sequence`. Pure math, never moves the arm. |
 | `arm_client.py` | Sends a planned path to `arm_server.py` (`mode="path"`, continuous, default; `mode="moves"` fallback) and streams live pour-roll targets. |
 | `layout.yaml` | 2-D offsets (mm) from each vial to each compartment, lift/lower heights, pour roll direction. |
-| `transfer.py` | The full round trip with the adaptive pour (above). |
+| `transfer.py` | The full round trip with the camera pour (above). |
 | `spots.py` / `spots.yaml` | Taught poses: `slot_A..D` (where each grab ends) and `well_1..4` (pour-ready pose over each well). |
 | `move.py` | CLI: plan, run, teach spots. |
-| `tests/` | `test_motion.py`: straightness, height, orientation, speed caps, refusals. `test_transfer.py`: flat shifts, round trip back onto the grab pose, layout parsing, roll limit, simulated adaptive pour. `python -m pytest -q tests` |
+| `tests/` | `test_motion.py`: straightness, height, orientation, speed caps, refusals. `test_transfer.py`: flat shifts, round trip back onto the grab pose, layout parsing, roll limit, pour_motor6 on the tilt stream with simulated liquid. `python -m pytest -q tests` |
 
 Units: joint angles in **degrees** `{1..6}` in the follower frame (same as `arm_server.py` and recordings),
 positions in **mm** in the arm base frame, speeds in mm/s. Forward kinematics comes from `kinematics.py`.

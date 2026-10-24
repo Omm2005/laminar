@@ -36,6 +36,7 @@ STATUS_FILE = HERE / "arm_status.json"
 TILT_FILE = HERE / "arm_tilt.json"         # live pour-roll offsets for arm_server's tilt_stream op
 CHUNK_MM = 10.0                            # mode="moves": one move command per this much gripper travel
 PICKUP_TIMEOUT_S = 3.0                     # arm_server must acknowledge a new command within this time
+STATUS_STALE_S = 3.0                       # idle arm_server rewrites its status every 0.5 s; older = not running
 
 
 class ArmClient:
@@ -66,6 +67,13 @@ class ArmClient:
         st = self.status()
         if not st or "command" not in st:
             raise RuntimeError("arm_server.py is not running (no robotics/arm_status.json). Start it first.")
+        # arm_server rewrites the status every 0.5 s while idle; an old file is left over from a server that
+        # exited (15 min idle timeout, a fault, or rest), and its joint angles are no longer true
+        age = time.time() - STATUS_FILE.stat().st_mtime
+        if age > STATUS_STALE_S and not st.get("busy"):
+            raise RuntimeError(f"arm_server.py is not running: arm_status.json is {age:.0f} s old "
+                               f"(last result: {st.get('result')!r}). It stops itself after "
+                               "15 min idle or on a fault; restart it.")
         return {i: float(st["command"][f"J{i}"]) for i in range(1, 7)}
 
     # ---- sending commands ----------------------------------------------------------------------

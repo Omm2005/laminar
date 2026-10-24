@@ -1,11 +1,10 @@
 """Checks for the vial -> compartment round trip (motion.plan_transfer / plan_return) and transfer.py.
-Pure math plus a simulated pour: no arm, no arm_server, no camera needed.
+Pure math plus a simulated pour (pour_motor6, ~20 s real time): no arm, no arm_server, no camera needed.
 
 Run from robotics/:   python -m pytest -q tests
 """
 import math
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -90,48 +89,46 @@ def test_roll_room_respects_the_wrist_limit():
     assert T.roll_room_deg(hi, +1) == 0.0
 
 
-class FakeTiltClient:
-    """Stands in for ArmClient's live-tilt channel."""
-    dry_run = False
-
-    def __init__(self):
-        self.tilts, self.started, self.ended = [], False, False
-
-    def start_tilt_stream(self, joint=6, max_rate_deg_s=120.0, timeout_s=0.5):
-        self.started = True
-        return -5.0
-
-    def set_tilt(self, deg, done=False):
-        self.tilts.append(deg)
-
-    def end_tilt_stream(self):
-        self.ended = True
-        return {"result": "ok"}
+def test_pour_direction_and_camera_column():
+    cfg = {"direction": -1, "columns": {"well_2": "B"}}
+    assert T.pour_direction(cfg) == -1 and T.pour_direction(cfg, "right") == 1
+    assert T.pour_direction({}) == 1
+    assert T.camera_column(cfg, "well_2") == "B" and T.camera_column(cfg, "A") == "A"
+    lay = T.load_layout()
+    assert T.camera_column(lay["pour"], "well_1") == "A"
 
 
-def test_adaptive_pour_drives_the_roll_and_returns_upright(monkeypatch):
-    """Om's PourController + run_pour, through ServerPourArm, against a simulated tube."""
-    from laminar import pour as P
+def test_camera_pour_refuses_before_opening_the_camera_when_not_calibrated(tmp_path):
+    with pytest.raises(RuntimeError, match="not calibrated"):
+        T.CameraPour("0", tmp_path / "missing.json", "A")
 
-    monkeypatch.setattr(time, "sleep", lambda s: None)
-    client = FakeTiltClient()
-    state = {"ml": 0.0}
 
-    def frame():
-        tilt = math.radians(abs(client.tilts[-1])) if client.tilts else 0.0
-        flow = max(0.0, 2.0 * (tilt - 0.6))      # liquid starts flowing past ~34 deg
-        state["ml"] += flow / 30
-        return P.PourFrame(ts=time.time(), ml=state["ml"], flow_ml_s=flow, pouring=flow > 0.1,
-                           color="blue", color_conf=0.9, conf=0.95)
+def test_pour_motor6_runs_on_the_tilt_stream_and_ends_upright(monkeypatch):
+    """Om's pour_right through ServerTiltJoint (arm_server's tilt_stream), simulated liquid and camera."""
+    from laminar import pour_motor6 as P6
 
-    monkeypatch.setattr(P.UdpPourFeed, "__init__", lambda self, port=5555: None)
-    monkeypatch.setattr(P.UdpPourFeed, "latest", lambda self: frame())
-    monkeypatch.setattr(P.UdpPourFeed, "close", lambda self: None)
-    monkeypatch.setattr(P.telemetry, "log", lambda *a, **k: None)
+    tilts = []
 
-    result = T.pour_camera(client, {"direction": 1}, ml=1.5, liquid="blue")
-    assert "done" in result
-    assert client.started and client.ended
-    assert max(client.tilts) <= T.roll_room_deg(-5.0, +1) + 1e-6   # never past the wrist limit
-    assert abs(client.tilts[-1]) < 1e-6                            # back upright
-    assert state["ml"] == pytest.approx(1.5, abs=0.3)
+    class FakeClient:
+        def status(self):
+            return {"command": {}}
+
+        def start_tilt_stream(self, joint=6, max_rate_deg_s=120.0, timeout_s=0.5):
+            return -5.0
+
+        def set_tilt(self, deg, done=False):
+            tilts.append(deg)
+
+        def end_tilt_stream(self):
+            tilts.append(0.0)
+
+    import arm_client
+    monkeypatch.setattr(arm_client, "ArmClient", FakeClient)
+    joint = P6.ServerTiltJoint(6)
+    try:
+        r = P6.motor_pour(joint, +1, target_frac=0.9, verbose=False)   # real time, simulated liquid
+    finally:
+        joint.close()
+    assert r.ok, r.reason
+    assert max(tilts) <= 90 - (-5.0)                # never past the wrist limit
+    assert tilts[-1] == 0.0                         # back upright

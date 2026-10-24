@@ -6,7 +6,7 @@
 # tube should hang for pouring into that compartment. `null` = not measured yet.
 #
 # transfer.py then does, from the pose the grab ends in:
-#   lift lift_mm -> shift (dx, dy) at that height -> lower lower_mm -> adaptive pour (wrist roll)
+#   lift lift_mm -> shift (dx, dy) at that height -> lower lower_mm -> camera pour (wrist roll)
 #   -> lift lower_mm -> shift (-dx, -dy) -> lower lift_mm      (ends exactly where the grab ended)
 lift_mm: 100
 lower_mm: 60
@@ -15,7 +15,9 @@ pour:
   joint: 6             # wrist roll
   direction: 1         # +1 or -1: which way the roll tips the tube's lip toward the compartment
   max_rate_deg_s: 120  # roll speed limit enforced by arm_server
-  udp_port: 5555       # PourFrame JSON from the side camera (software/laminar/pour.py)
+  # side-camera column (as clicked in `python -m laminar.pour_motor6 calibrate`) showing each compartment;
+  # the camera pour fills that column. Calibrate every column here, or the wrong-column check can't see it.
+  columns: {well_1: A, well_2: B, well_3: C, well_4: D}
 
 routes:
   vial_A: {well_1: null, well_2: null, well_3: null, well_4: null}
