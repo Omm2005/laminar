@@ -7,3 +7,6 @@ arm_status.json
 STOP
 __pycache__/
 arm_tilt.json
+vision_calib.yaml
+vision_debug.jpg
+vision_markers.pdf

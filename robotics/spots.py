@@ -50,6 +50,9 @@ def save_spot(name: str, q: dict[int, float], path: FilePath = SPOTS_FILE) -> No
         body += f"{grp}:\n"
         for spot, val in (data.get(grp) or {}).items():
             body += f"  {spot}: {'null' if val is None else '[' + ', '.join(str(v) for v in val) + ']'}\n"
+    rest = {k: v for k, v in data.items() if k not in ("slots", "wells")}   # e.g. vision.py's well_offsets
+    if rest:
+        body += yaml.safe_dump(rest, sort_keys=False, default_flow_style=None)
     path.write_text(header + body)
 
 

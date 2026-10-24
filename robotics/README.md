@@ -103,3 +103,68 @@ updates stop, then returns the joint to `base`. `mode="moves"` is still there as
 
 `DEFAULT_LIFT_SPEED` 20 mm/s, `DEFAULT_LOWER_SPEED` 15 mm/s, `DEFAULT_TRAVEL_SPEED` 30 mm/s,
 `MAX_JOINT_SPEED_DEG_S` 45, `POS_TOL_MM` 1, `ANG_TOL_DEG` 2. All are first guesses; tune on the arm.
+
+## Vision: finding the containers
+
+`vision.py` finds the 4 pour containers wherever the judges put them, with the wrist camera. Each container sits on a
+flat card with its own ArUco marker (DICT_4X4_50, ids 10-13 = containers 1-4, 40 mm) lying flat beside it. The arm
+goes to one fixed **scan pose** (high, camera straight down); there the camera is effectively a fixed overhead camera,
+so pixels map to the table through a homography, calibrated once by touching the 4 markers with the gripper tip. If a
+marker is out of view, only the base (J1) sweeps (-40, -20, 0, +20, +40 deg) and the result is rotated back about the
+base axis. Pour spots are taught relative to each container's own marker, so they move and turn with the container.
+Scan -> compute -> move: nothing is tracked while the arm moves, and every target is checked against the workspace box,
+the tube rack and the other containers. The tubes stay in their fixed rack; nothing is touched during a normal run.
+
+Install: `pip install -r requirements.txt` (`opencv-contrib-python` provides `cv2.aruco`; uninstall `opencv-python`
+first if it is installed, the two conflict).
+
+### One-time setup
+
+```
+python vision.py markers                  # vision_markers.pdf: print at 100 %, check a marker measures 40 mm
+python vision.py calib-lens photos/       # optional: 10-20 photos of the checkerboard page from the wrist camera
+python vision.py calib-table --run        # guided: jog to the scan pose (Enter), spread the containers to the
+                                          # corners of their area, touch each marker centre with the gripper tip
+                                          # (Enter x4), then it returns to the scan pose and takes the photo
+python vision.py check-sweep --run        # optional: same marker seen at two base angles should agree < 2 mm
+python vision.py teach-well well_1 --run  # per container: scan, then jog to the pour pose (tube held, tilted to a
+                                          # typical pour angle, lip over the container) and press Enter
+```
+
+Redo `calib-table` only if the camera mount or the scan pose changes. Optional `vision:` keys in `bench.yaml` override
+the defaults at the top of `vision.py`, e.g. `marker_mm`, `camera`, `sweep_stops_deg`, `container_radius_mm`,
+`tube_rack_mm: {min: [x, y], max: [x, y]}` (spots inside the rack rectangle are refused; without it the rack isn't
+checked).
+
+### A run
+
+```
+python vision.py scan --run               # all 4 container poses + their pour targets
+python vision.py show                     # vision_debug.jpg: markers, ids, pour spots drawn
+```
+
+In code, after the recorded grab of a tube:
+
+```python
+import motion as M, vision as V
+from arm_client import ArmClient
+
+client = ArmClient()
+dets = V.scan(client, run=True)                              # do this BEFORE the grab: the scan pose is high
+# ... play the recorded grab of the tube ...
+q = client.current_joints()
+lift = M.plan_lift(q, 100)
+_, R_carry = M.fk_mm(lift.final_joints)                      # the tube's carry orientation
+target = V.well_target("well_2", dets, R_carry=R_carry)      # {"xy_mm": [x, y], "R": 3x3}, safety-checked
+travel = M.plan_travel(lift.final_joints, target)
+lower = M.plan_lower(travel.final_joints, 60)
+for p in (lift, travel, lower):
+    client.run(p)
+# ... pour (wrist roll), then the reverse: lift(60) -> travel back to the slot -> lower(100) -> release
+```
+
+| File | What it does |
+| --- | --- |
+| `vision.py` | Lens + table calibration, ArUco detection, base sweep, marker-relative pour spots, CLI |
+| `vision_calib.yaml` | Lens model + homography + scan pose (local, not committed) |
+| `tests/test_vision.py` | Synthetic marker images: homography, detection, rotations, sweep consistency, safety checks |

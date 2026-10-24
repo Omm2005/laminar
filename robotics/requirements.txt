@@ -3,5 +3,5 @@ gs_usb
 pyusb
 libusb-package
 motorbridge-smart-servo
-opencv-python
+opencv-contrib-python  # cv2.aruco for vision.py; replaces opencv-python (never install both)
 numpy
