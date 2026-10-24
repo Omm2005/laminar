@@ -76,7 +76,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task", help='e.g. "pour half of channel 3 from vial 1"')
     ap.add_argument("--confirm-each", action="store_true")
-    ap.add_argument("--level", default="manual", choices=["manual", "opencv"])
+    ap.add_argument("--level", default="auto", choices=["auto", "manual", "opencv"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--keep-server", action="store_true")
     args = ap.parse_args()

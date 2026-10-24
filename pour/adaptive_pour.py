@@ -106,7 +106,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("target_ml", type=float)
     ap.add_argument("--channel", type=int, required=True)
-    ap.add_argument("--level", default=default_backend(), choices=["manual", "opencv"])
+    ap.add_argument("--level", default=default_backend(), choices=["auto", "manual", "opencv"])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--yes", action="store_true", help="skip confirm before real move")
     args = ap.parse_args()

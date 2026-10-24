@@ -3,7 +3,9 @@
 Everything is MOUSE CLICKS in the camera window, or ENTER in Terminal. No other keys.
 
 Step 1  In the camera window, click 2 corners per column: TOP-LEFT (just below the rim,
-        inside the walls), then BOTTOM-RIGHT (on the column's floor). Do A, B, C, D in order.
+        inside the walls), then BOTTOM-RIGHT (on the column's floor). Do A, B, C, D in order,
+        then the 8 EMPTY columns in any order (named X1..X8). The empty columns are watched
+        during every pour: liquid in one of them stops the pour.
         Right-click undoes the last click. After the last column it moves on by itself.
 Step 2  Empty the columns, press ENTER in Terminal (captures the empty reference).
 Step 3  Add liquid to column A with a syringe (--step mL each time), wait ~2 s,
@@ -12,6 +14,7 @@ Step 3  Add liquid to column A with a syringe (--step mL each time), wait ~2 s,
 
 Run:  python calibrate_level.py --cam 0 --step 0.5
       python calibrate_level.py --cam 0 --columns 2     (only A and B)
+      python calibrate_level.py --cam 0 --empty 0       (don't watch any empty columns)
 """
 from __future__ import annotations
 
@@ -60,7 +63,7 @@ def show(frame, lines, boxes):
     cv2.waitKey(15)
 
 
-def click_boxes(cam, names):
+def click_boxes(cam, names, empty=()):
     clicks: list[tuple[int, int]] = []
 
     def on_mouse(event, x, y, *_):
@@ -78,10 +81,11 @@ def click_boxes(cam, names):
             boxes[names[i]] = (min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
         col = names[len(clicks) // 2]
         which = "TOP-LEFT (below rim)" if len(clicks) % 2 == 0 else "BOTTOM-RIGHT (floor)"
+        what = f"EMPTY column {col} (any order)" if col in empty else f"Column {col}"
         f, _ = cam.read()
         for c in clicks[len(boxes) * 2:]:
             cv2.circle(f, c, 4, (0, 0, 255), -1)
-        show(f, [f"Column {col}: click {which}", "right-click = undo"], boxes)
+        show(f, [f"{what}: click {which}", "right-click = undo"], boxes)
     out = {}
     for i, n in enumerate(names):
         (x1, y1), (x2, y2) = clicks[2 * i], clicks[2 * i + 1]
@@ -94,16 +98,20 @@ def main():
     p.add_argument("--cam", default="0")
     p.add_argument("--step", type=float, default=0.5, help="mL added each time")
     p.add_argument("--columns", type=int, default=4, help="how many columns (A..D)")
+    p.add_argument("--empty", type=int, default=8,
+                   help="how many columns must stay empty (watched, named X1..)")
     p.add_argument("--each", action="store_true", help="calibrate every column separately")
     p.add_argument("--out", default="level_calib.json")
     a = p.parse_args()
     cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
     names = NAMES[:a.columns]
+    empty = [f"X{i + 1}" for i in range(a.empty)]
 
     # Step 1: boxes by mouse
     print("STEP 1: click in the CAMERA WINDOW: top-left then bottom-right for each column.")
+    print(f"        {', '.join(names)} first, then the {len(empty)} empty columns in any order.")
     print("        (If you can't see the window, look behind Terminal.)")
-    columns = click_boxes(cam, names)
+    columns = click_boxes(cam, names + empty, set(empty))
     boxes = {k: c.roi for k, c in columns.items()}
     print("boxes:", boxes)
     cv2.imwrite("level_boxes.png", cam.read()[0])
@@ -151,11 +159,11 @@ def main():
             print(f"  {name}: {len(curve) - 1} points, about "
                   f"{curve[-1][0] / curve[-1][1]:.1f} px per mL")
 
-    if not a.each:
-        for name, col in columns.items():
-            if name != targets[0]:
-                col.curve = list(columns[targets[0]].curve)
-    save_columns(a.out, columns, {"step_ml": a.step, "ref_image": "level_ref.png"})
+    for name, col in columns.items():          # same geometry: copy A's table
+        if name not in targets:
+            col.curve = list(columns[targets[0]].curve)
+    save_columns(a.out, columns, {"step_ml": a.step, "ref_image": "level_ref.png",
+                                  "empty": empty})
     print(f"\nSaved {a.out}. Check it live with:  python level.py --cam {a.cam}")
     cv2.destroyAllWindows()
     cam.stop()
