@@ -102,5 +102,14 @@ export default defineSchema({
     name: v.string(),
     lastHeartbeat: v.number(),
     lastButton: v.optional(v.string()),
+    online: v.optional(v.boolean()),
   }).index("by_name", ["name"]),
+
+  scale: defineTable({
+    t: v.number(),
+    grams: v.number(),
+    jobId: v.optional(v.id("jobs")),
+  })
+    .index("by_t", ["t"])
+    .index("by_jobId_t", ["jobId", "t"]),
 });

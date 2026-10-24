@@ -17,16 +17,34 @@ export default function Live() {
     api.robot.levelsForJob,
     activeJob ? { jobId: activeJob._id, limit: 400 } : "skip",
   );
+  const scale = useQuery(
+    api.scale.forJob,
+    activeJob ? { jobId: activeJob._id, limit: 400 } : "skip",
+  );
+  const latestScale = useQuery(api.scale.latest, {});
   const stopState = useQuery(api.control.stopRequested, {});
   const nodes = useQuery(api.bench.nodes, {});
   const estop = useMutation(api.control.estop);
   const clearStop = useMutation(api.control.clearStop);
 
   const joints = telem?.joints ?? Array(6).fill(0);
-  const levelData = (levels ?? []).map((l) => ({
-    t: Math.round((l.t - (levels![0]?.t ?? l.t)) / 100) / 10, // seconds since start, 1dp
-    ml: l.ml,
-  }));
+  // merge level + scale samples by their timestamp so both lines share one X axis
+  const t0 = levels?.[0]?.t ?? scale?.[0]?.t ?? 0;
+  type Point = { t: number; ml?: number; grams?: number };
+  const byT = new Map<number, Point>();
+  for (const l of levels ?? []) {
+    const t = Math.round((l.t - t0) / 100) / 10;
+    const p = byT.get(t) ?? { t };
+    p.ml = l.ml;
+    byT.set(t, p);
+  }
+  for (const s of scale ?? []) {
+    const t = Math.round((s.t - t0) / 100) / 10;
+    const p = byT.get(t) ?? { t };
+    p.grams = s.grams;
+    byT.set(t, p);
+  }
+  const chartData = Array.from(byT.values()).sort((a, b) => a.t - b.t);
 
   return (
     <>
@@ -68,23 +86,28 @@ export default function Live() {
           </div>
 
           <div className="card">
-            <h3>Pour level (mL vs s)</h3>
-            {activeJob && levelData.length > 1 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={levelData}>
+            <h3>Pour (mL left · grams right, vs s)</h3>
+            {activeJob && chartData.length > 1 ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={chartData}>
                   <CartesianGrid stroke="#262c3b" vertical={false} />
                   <XAxis dataKey="t" stroke="#7d869c" tick={{ fontSize: 11 }} />
-                  <YAxis stroke="#7d869c" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="ml" stroke="#7dd3fc" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="g" orientation="right" stroke="#e8c257" tick={{ fontSize: 11 }} />
                   <Tooltip
                     contentStyle={{ background: "#141821", border: "1px solid #262c3b", fontSize: 12 }}
                     labelStyle={{ color: "#c8cedb" }}
                   />
-                  <ReferenceLine y={activeJob.targetMl} stroke="#e8c257" strokeDasharray="4 4"
-                    label={{ value: "target", fill: "#e8c257", fontSize: 11, position: "right" }} />
-                  <Line type="monotone" dataKey="ml" stroke="#7dd3fc" dot={false} strokeWidth={2} />
+                  <ReferenceLine yAxisId="ml" y={activeJob.targetMl} stroke="#7dd3fc"
+                    strokeDasharray="4 4"
+                    label={{ value: "target mL", fill: "#7dd3fc", fontSize: 11, position: "right" }} />
+                  <Line yAxisId="ml" type="monotone" dataKey="ml" stroke="#7dd3fc" dot={false}
+                    strokeWidth={2} connectNulls name="mL" />
+                  <Line yAxisId="g" type="monotone" dataKey="grams" stroke="#e8c257" dot={false}
+                    strokeWidth={2} connectNulls name="grams" />
                 </LineChart>
               </ResponsiveContainer>
-            ) : <p className="mono">no level samples yet</p>}
+            ) : <p className="mono">no samples yet</p>}
           </div>
         </div>
 
@@ -108,28 +131,36 @@ export default function Live() {
           </div>
 
           <div className="card">
-            <h3>Bench nodes</h3>
+            <h3>Bench Node</h3>
             {!nodes ? <p className="mono">loading…</p>
               : nodes.length === 0 ? <p className="mono">none registered</p>
                 : (
-                  <table className="table">
-                    <thead><tr><th>name</th><th>heartbeat</th><th>last btn</th></tr></thead>
-                    <tbody>
-                      {nodes.map((n) => {
-                        const age = (Date.now() - n.lastHeartbeat) / 1000;
-                        const stale = age > 5;
-                        return (
-                          <tr key={n._id}>
-                            <td className="mono">{n.name}</td>
-                            <td className="mono" style={{ color: stale ? "var(--danger)" : "var(--ok)" }}>
-                              {age < 60 ? `${age.toFixed(0)}s ago` : `${(age / 60).toFixed(0)}m ago`}
-                            </td>
-                            <td className="mono">{n.lastButton ?? "—"}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                    {nodes.map((n) => {
+                      const age = (Date.now() - n.lastHeartbeat) / 1000;
+                      return (
+                        <li key={n._id} style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "8px 0", borderBottom: "1px solid var(--border)",
+                        }}>
+                          <span style={{
+                            width: 10, height: 10, borderRadius: "50%",
+                            background: n.online ? "var(--ok)" : "var(--danger)",
+                            boxShadow: n.online ? "0 0 6px var(--ok)" : "none",
+                            flexShrink: 0,
+                          }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="mono" style={{ color: "var(--text)" }}>{n.name}</div>
+                            <div className="mono" style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                              hb {age < 60 ? `${age.toFixed(0)}s` : `${(age / 60).toFixed(0)}m`} ago
+                              {" · btn "}{n.lastButton ?? "—"}
+                              {" · "}{latestScale ? `${latestScale.grams.toFixed(1)} g` : "— g"}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 )}
           </div>
         </div>
