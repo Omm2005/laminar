@@ -96,3 +96,46 @@ python -m laminar.pour_live --target 2 --color blue --motor real --max-tilt 0.8 
 
 Mac + PCAN: `--channel can0@1000000` (default). Ubuntu: `--channel can0`. Confirm joint 6's RobStride model and pass `--model`.
 `motor6.py` is untested on hardware — check it against motorbridge's `robstride_wrapper_demo.py`.
+
+## Fetch.ai agent (ASI:One) and Tiger Data telemetry
+
+![tag:innovationlab](https://img.shields.io/badge/innovationlab-3D8BD3)
+![tag:hackathon](https://img.shields.io/badge/hackathon-5F43F1)
+
+| File | What it is |
+| --- | --- |
+| `laminar/lab_agent.py` | Chat logic: bench view, request -> plan (built by code), `validate_plan`, approvals, run + report. No network |
+| `laminar/fetch_agent.py` | uAgent `laminar-lab`: Agent Chat Protocol, Agentverse mailbox, so it is usable from ASI:One |
+| `laminar/tiger.py` | Tiger Data: hypertables, continuous aggregates, compression, background writer, arm tracking sampler |
+| `AGENT.md` | The agent's Agentverse profile |
+
+The whole workflow runs in an ASI:One chat: `what's on the bench?` -> `pour 2 mL of blue into tube1` (plan,
+checked against the bench) -> `approve <id>` -> step-by-step report with the measured volume. Anyone can
+ask for a plan; on real hardware only addresses in `LAMINAR_APPROVERS` can approve one. Requests are read
+by a rule parser (no API calls); `LAMINAR_PLANNER=claude` reads free-form requests with Claude instead,
+and the same code-side validation applies either way.
+
+```bash
+pip install -r requirements-agents.txt
+export LAMINAR_AGENT_SEED="<long secret phrase>"     # fixed agent address
+export LAMINAR_APPROVERS="<your ASI:One address>"
+python -m laminar.fetch_agent                         # prints the address + inspector link: Connect -> Mailbox
+```
+
+| Agent | Address |
+| --- | --- |
+| `laminar-lab` | _fill in after the first run_ |
+
+Tiger Data (TimescaleDB): every `telemetry.log()` event, every pour sample and the arm's per-joint
+tracking error, as hypertables with real-time continuous aggregates (`pour_1s`, `arm_tracking_1s`), a
+`runs` view and compression after a day. Writes happen on a background thread and never block the bench.
+
+```bash
+export TIGER_DATABASE_URL="postgres://tsdbadmin:...@....tsdb.cloud.timescale.com:5432/tsdb?sslmode=require"
+python -m laminar.tiger init          # tables, aggregates, policies (safe to re-run)
+python -m laminar.tiger backfill      # logs/telemetry.jsonl
+python -m laminar.tiger arm           # sample robotics/arm_status.json while arm_server runs
+python -m laminar.tiger report        # recent runs, pours, per-joint tracking from the aggregates
+```
+
+The fetch agent streams to Tiger automatically when `TIGER_DATABASE_URL` is set.

@@ -1,0 +1,5 @@
+# Fetch.ai chat agent (laminar/fetch_agent.py) and Tiger Data telemetry (laminar/tiger.py)
+uagents>=0.25.5
+psycopg[binary]>=3.2
+# only with LAMINAR_PLANNER=claude
+anthropic>=2.3
