@@ -74,18 +74,22 @@ def main() -> None:
                     sample["commanded"] = [float(x) for x in s["commanded"]]
                 batch.append(sample)
             if len(batch) >= a.batch:
+                payload: dict = {"samples": batch}
+                if a.job_id:  # omit the key when no job is active; v.optional rejects null
+                    payload["jobId"] = a.job_id
                 try:
-                    convex.mutation("robot:pushTelemetry",
-                                    {"jobId": a.job_id, "samples": batch})
+                    convex.mutation("robot:pushTelemetry", payload)
                 except Exception as e:
                     print(f"[stream_joints] push failed, skipping batch: {e!r}", file=sys.stderr)
                 batch = []
             time.sleep(a.period)
     except KeyboardInterrupt:
         if batch:
+            payload = {"samples": batch}
+            if a.job_id:
+                payload["jobId"] = a.job_id
             try:
-                convex.mutation("robot:pushTelemetry",
-                                {"jobId": a.job_id, "samples": batch})
+                convex.mutation("robot:pushTelemetry", payload)
             except Exception:
                 pass
         print()

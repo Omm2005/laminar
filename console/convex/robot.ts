@@ -51,15 +51,11 @@ export const pushLevels = mutation({
   },
 });
 
-/** Latest telemetry sample, for dashboard gauges. */
+/** Latest telemetry sample overall, regardless of jobId. Live-view gauges want the
+    newest numbers from the arm no matter which job (if any) owns them. */
 export const latestTelemetry = query({
-  args: { jobId: v.optional(v.id("jobs")) },
-  handler: async (ctx, args) => {
-    if (args.jobId) {
-      return await ctx.db.query("telemetry")
-        .withIndex("by_jobId_t", (q) => q.eq("jobId", args.jobId!))
-        .order("desc").first();
-    }
+  args: {},
+  handler: async (ctx) => {
     return await ctx.db.query("telemetry").withIndex("by_t").order("desc").first();
   },
 });

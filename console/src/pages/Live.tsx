@@ -12,7 +12,7 @@ const JOINT_NAMES = ["pan", "lift", "elbow", "wflex", "wyaw", "wroll"];
 export default function Live() {
   const jobs = useQuery(api.jobs.list, { limit: 1 });
   const activeJob = jobs?.[0];
-  const telem = useQuery(api.robot.latestTelemetry, { jobId: activeJob?._id });
+  const telem = useQuery(api.robot.latestTelemetry, {});
   const levels = useQuery(
     api.robot.levelsForJob,
     activeJob ? { jobId: activeJob._id, limit: 400 } : "skip",
