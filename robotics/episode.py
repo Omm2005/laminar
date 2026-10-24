@@ -35,6 +35,7 @@ from arm_client import ArmClient
 HERE = FilePath(__file__).resolve().parent
 RECORDINGS = HERE / "recordings"
 LIFT_MM = 100.0
+TRAVEL_SPEED_MM_S = 50.0  # the sideways carry; slow carries crawl at 1-3 deg/s per joint, where friction is worst
 REPLAY_MAX_DEG_S = 80.0  # arm_server refuses path steps over 90 deg/s
 IDLE_DEG = 0.5           # leading frames within this of frame 0 are skipped
 
@@ -77,7 +78,7 @@ def mark(rec: FilePath, name: str) -> None:
           + f"  ->  x={p[0]:.0f} y={p[1]:.0f} z={p[2]:.0f} mm")
 
 
-def plan_a_to_b(ep: dict) -> list[M.Path]:
+def plan_a_to_b(ep: dict, travel_speed: float = TRAVEL_SPEED_MM_S) -> list[M.Path]:
     """lift LIFT_MM at A -> flat travel to above B -> lower to B's height."""
     qa, qb = arm(ep["A"]["command"]), arm(ep["B"]["command"])
     pa, Ra = M.fk_mm(qa)
@@ -87,7 +88,8 @@ def plan_a_to_b(ep: dict) -> list[M.Path]:
     c, s = math.cos(yaw), math.sin(yaw)
     R1 = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]) @ Ra
     lift = M.plan_lift(qa, LIFT_MM)
-    travel = M.plan_travel(lift.final_joints, {"xy_mm": pb[:2].tolist(), "R": R1.tolist()}, label="travel A -> B")
+    travel = M.plan_travel(lift.final_joints, {"xy_mm": pb[:2].tolist(), "R": R1.tolist()},
+                           speed_mm_s=travel_speed, label="travel A -> B")
     lower = M.plan_lower(travel.final_joints, LIFT_MM - (pb[2] - pa[2]))
     return [lift, travel, lower]
 
@@ -110,6 +112,7 @@ def main() -> None:
     ap.add_argument("name", nargs="?", choices=["A", "B"], help="mark: which pose")
     ap.add_argument("--rec", default=None, help="recording folder (default: newest in recordings/)")
     ap.add_argument("--run", action="store_true", help="replay: move the arm (otherwise print only)")
+    ap.add_argument("--travel-speed", type=float, default=TRAVEL_SPEED_MM_S, help="sideways carry, mm/s")
     a = ap.parse_args()
     rec = FilePath(a.rec) if a.rec else latest_recording()
 
@@ -126,7 +129,7 @@ def main() -> None:
     ep["travel"] = {"dxy_mm": [round(float(v), 1) for v in (pb - pa)[:2]], "dz_mm": round(float(pb[2] - pa[2]), 1)}
     (rec / "episode.json").write_text(json.dumps(ep, indent=2))
     try:
-        moves = plan_a_to_b(ep)
+        moves = plan_a_to_b(ep, a.travel_speed)
     except M.PlanError as e:
         sys.exit(f"NOT MOVING: {e}")
     fps = json.loads((rec / "meta.json").read_text()).get("fps", 20.0)
