@@ -147,14 +147,14 @@ class CameraPour:
         cap = float(calib["capacity_ml"])
         return frac, frac * cap, cap
 
-    def pour_ml(self, direction: int, add_ml: float, max_tilt: float, view: bool = True):
+    def pour_ml(self, direction: int, add_ml: float, max_tilt: float, view: bool = True, on_tick=None):
         """Pour add_ml MORE into the column (whatever it already holds). Returns (PourResult, mL added or None).
         Refuses, without tilting, if that would overfill the channel."""
         frac0, ml0, cap = self.level()
         target = frac0 + add_ml / cap
         if target > 1.0:
             raise RuntimeError(f"channel {self.column} holds {ml0:.1f} of {cap:g} mL: +{add_ml:g} mL would overflow")
-        r = self.pour(direction, target, max_tilt, view=view)
+        r = self.pour(direction, target, max_tilt, view=view, on_tick=on_tick)
         added = None if r.final_ml is None else round(r.final_ml - ml0, 3)
         return r, added
 
