@@ -417,7 +417,7 @@ class ArmBackend(Backend):
         vial, well, col, ml = a["vial_id"], a["compartment"], a["target"], a["ml"]
         dxy = T.route(self.layout, vial, well)
         lift = float(self.layout.get("lift_mm", 150))
-        lower = float(self.layout.get("lower_mm", 110))
+        lower = float(self.layout.get("lower_mm", 150))
         direction = T.pour_direction(self.cfg, None)
         client = T.ArmClient(dry_run=self.dry_run)
         q0 = client.current_joints() if not self.dry_run else _dry_joints()

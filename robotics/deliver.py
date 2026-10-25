@@ -32,10 +32,10 @@ import yaml
 
 import markers as T
 import motion as M
-from episode import plan_a_to_b
+from episode import EXTRA_LOWER_MM, plan_a_to_b
 from paths import load
 
-# the same rise and lower as every transfer (motion.py): up 150, down 110, so the tip ends 40 mm above the grasp height
+# the same rise and lower as every transfer (motion.py): up 150, down 150, so the tip ends at the grasp height
 ABOVE_MM = M.TRANSFER_LIFT_MM - M.TRANSFER_LOWER_MM
 # where to go relative to each container's marker, in the tray frame (x along marker 10 -> 13), mm. All zero for
 # now: straight over the marker centre.
@@ -142,7 +142,7 @@ def pour_pose(pose: dict, cont: int, offsets: dict) -> tuple[np.ndarray, np.ndar
     off = offsets[cont]
     th = float(pose["heading_deg"])
     xy = np.asarray(pose["containers"][cont], float) + T.rot(th) @ np.asarray(off["dxy_mm"], float)
-    p = np.array([xy[0], xy[1], float(off["z_mm"])])
+    p = np.array([xy[0], xy[1], float(off["z_mm"]) - EXTRA_LOWER_MM])  # EXTRA_LOWER_MM below the taught height
     R = T.yaw(th) @ np.asarray(off["R_tray"], float)
     q0 = {int(j): float(v) for j, v in off["joints"].items()}
     p0, _ = M.fk_mm(q0)
@@ -221,7 +221,8 @@ def plan_carry(vial: str, xy) -> tuple[list, dict]:
     upright as it was grabbed; only its heading turns, with the base."""
     qa = {j: v for j, v in load(vial)["initial_position"].items() if j <= 6}
     pa, Ra = M.fk_mm(qa)
-    target = np.array([xy[0], xy[1], pa[2] + ABOVE_MM])
+    # plan_a_to_b already lowers EXTRA_LOWER_MM past the target: aim that much higher so it ends ABOVE_MM up
+    target = np.array([xy[0], xy[1], pa[2] + ABOVE_MM + EXTRA_LOWER_MM])
     turn = math.degrees(math.atan2(xy[1], xy[0]) - math.atan2(pa[1], pa[0]))
     seed = {**qa, 1: qa[1] + turn}
     qb, pe, ae = M.ik(seed, target, T.yaw(turn) @ Ra)

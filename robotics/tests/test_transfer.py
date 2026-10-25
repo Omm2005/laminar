@@ -43,14 +43,14 @@ def test_transfer_heights_and_offsets():
     lift, shift, lower = M.plan_transfer(GRASP, DXY)
     p0, _ = M.fk_mm(GRASP)
     p_pour, _ = M.fk_mm(lower.final_joints)
-    assert np.allclose(p_pour - p0, [DXY[0], DXY[1], 150.0 - 110.0], atol=1.0)  # 40 mm above the grab height
-    assert lift.label.startswith("lift 150") and lower.label.startswith("lower 110")
+    assert np.allclose(p_pour - p0, [DXY[0], DXY[1], 150.0 - 150.0], atol=1.0)  # at the grab height
+    assert lift.label.startswith("lift 150") and lower.label.startswith("lower 150")
 
 
 def test_return_reverses_every_parameter_and_lands_on_the_grab_pose():
     out = M.plan_transfer(GRASP, DXY)
     up, back, down = M.plan_return(out[-1].final_joints, DXY)
-    assert up.label.startswith("lift 110") and down.label.startswith("lower 150")
+    assert up.label.startswith("lift 150") and down.label.startswith("lower 150")
     p_top_out, _ = M.fk_mm(out[1].final_joints)
     p_top_back, _ = M.fk_mm(up.final_joints)
     assert abs(p_top_out[2] - p_top_back[2]) < 1.0        # same carry plane both ways
@@ -79,7 +79,7 @@ def test_layout_route_errors_are_clear(tmp_path):
 
 def test_shipped_layout_parses():
     lay = T.load_layout()
-    assert lay["lift_mm"] == 150 and lay["lower_mm"] == 110
+    assert lay["lift_mm"] == 150 and lay["lower_mm"] == 150
     assert set(lay["routes"]) == {"vial_A", "vial_B", "vial_C", "vial_D"}
 
 

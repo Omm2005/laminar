@@ -37,6 +37,7 @@ HERE = FilePath(__file__).resolve().parent
 RECORDINGS = HERE / "recordings"
 LIFT_MM = 150.0
 MIN_LOWER_MM = 110.0  # the carry runs at least this far above B, so the last move is always a real lower
+EXTRA_LOWER_MM = 40.0  # the final lower goes this much further down than the taught/target height
 REPLAY_MAX_DEG_S = 80.0  # arm_server refuses path steps over 90 deg/s
 IDLE_DEG = 0.5           # leading frames within this of frame 0 are skipped
 
@@ -92,7 +93,7 @@ def plan_a_to_b(ep: dict) -> list[M.Path]:
     lift_mm = max(LIFT_MM, (pb[2] - pa[2]) + MIN_LOWER_MM)
     lift = M.plan_lift(qa, lift_mm)
     travel = M.plan_travel(lift.final_joints, {"xy_mm": pb[:2].tolist(), "R": R1.tolist()}, label="travel A -> B")
-    lower = M.plan_lower(travel.final_joints, lift_mm - (pb[2] - pa[2]))
+    lower = M.plan_lower(travel.final_joints, lift_mm - (pb[2] - pa[2]) + EXTRA_LOWER_MM)
     return [lift, travel, lower]
 
 

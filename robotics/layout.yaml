@@ -9,7 +9,7 @@
 #   lift lift_mm -> shift (dx, dy) at that height -> lower lower_mm -> camera pour (wrist roll)
 #   -> lift lower_mm -> shift (-dx, -dy) -> lower lift_mm      (ends exactly where the grab ended)
 lift_mm: 150
-lower_mm: 110
+lower_mm: 150
 
 pour:
   joint: 6             # wrist roll

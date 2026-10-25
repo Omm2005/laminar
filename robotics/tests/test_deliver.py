@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import pytest
 
@@ -54,8 +55,11 @@ def test_learned_offsets_give_back_the_taught_pour_joints_when_the_tray_has_not_
     for c in offs:
         p, R, seed = D.pour_pose(pose, c, offs)
         Rg, q = D.reachable_pour(p, R, seed)
-        assert np.allclose(Rg, R)                      # no heading give needed at the taught place
-        assert max(abs(q[j] - offs[c]["joints"][j]) for j in range(1, 7)) < 0.5
+        # 20 mm below the taught pose J4 can hit its limit: a few degrees of give (heading / pitch) are allowed
+        assert math.degrees(math.acos(min(1.0, (np.trace(Rg @ R.T) - 1) / 2))) <= 10.0
+        p_taught, R_taught = M.fk_mm(offs[c]["joints"])
+        assert np.allclose(R, R_taught, atol=1e-4)    # the taught orientation ...
+        assert np.allclose(p, p_taught - [0.0, 0.0, D.EXTRA_LOWER_MM], atol=0.5)  # ... EXTRA_LOWER_MM lower
 
 
 def test_pour_pose_moves_and_turns_with_the_tray():
@@ -102,6 +106,6 @@ def test_the_carry_ends_exactly_in_the_taught_pour_joints():
     turn = moves[-1]
     assert turn.label.startswith("turn") and len(turn.joints) > 10
     assert np.allclose(M.fk_mm(turn.final_joints)[0], p, atol=1.0)
-    assert max(abs(turn.final_joints[j] - q[j]) for j in range(1, 7)) < 0.5
+    assert max(abs(turn.final_joints[j] - qp[j]) for j in range(1, 7)) < 0.5
     for qj in turn.joints:                       # the tip holds still while the gripper turns
         assert np.linalg.norm(M.fk_mm(qj)[0] - p) < 1.0
