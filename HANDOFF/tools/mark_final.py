@@ -2,7 +2,7 @@
 import re
 import sys
 
-sys.path.insert(0, r"C:SERSMOGHDOWNLOADSaMINAR-MAINOBOTICS")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "robotics"))
 from spots import save_spot  # noqa: E402
 
 vial, out = sys.argv[1].upper(), sys.argv[2]

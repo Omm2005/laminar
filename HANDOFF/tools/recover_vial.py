@@ -1,7 +1,7 @@
 """Bring a held vial from wherever the arm is back into its slot: up to the carry plane, over the slot, down to
 the grasp pose, then the teleop grab backwards (releases it, back to rest)."""
 import sys
-sys.path.insert(0, r"C:SERSMOGHDOWNLOADSaMINAR-MAINOBOTICS")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "robotics"))
 import numpy as np
 import motion as M
 import grab

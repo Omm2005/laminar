@@ -1,6 +1,6 @@
 """CAN health at rest: hold every motor where it is at 100 Hz for 4 s and count feedback gaps per motor."""
 import sys, time, math
-sys.path.insert(0, r"C:SERSMOGHDOWNLOADSaMINAR-MAINOBOTICS")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "robotics"))
 from robstride_can import RobStrideBus, JOINTS, P_MECH_POS, P_RUN_MODE, fine_timer
 from leader_arm import load_follower_zero
 fine_timer()
