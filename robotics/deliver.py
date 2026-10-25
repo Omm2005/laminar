@@ -131,26 +131,52 @@ def pour_pose(pose: dict, cont: int, offsets: dict) -> tuple[np.ndarray, np.ndar
     return p, R, {**q0, 1: q0[1] + turn}
 
 
-MAX_HEADING_GIVE_DEG = 20.0  # the taught pour poses sit at J4's limit (89 of 90 deg): when the tray's new place
-                             # makes the exact orientation unreachable, turn the gripper about vertical, this far at most
+# The taught pour poses sit at J4's limit (89 of 90 deg), so a turned tray often makes the exact orientation
+# unreachable. Then the closest reachable orientation is used, from two kinds of give that leave the pour itself
+# alone: a turn of the whole gripper about vertical (HEADING: the pour direction turns with it) and a tilt of the vial
+# fore/aft along the gripper (PITCH: about the tool y axis; the pour tips the vial about the gripper axis, J6, so a
+# small pitch doesn't change where it pours). Never a tilt about the gripper axis: that would be a pour already.
+MAX_HEADING_GIVE_DEG = 90.0
+MAX_PITCH_GIVE_DEG = 20.0
+PITCH_COST = 1.5               # 1 deg of pitch counts like 1.5 deg of heading when choosing the closest pose
+POUR_ROLL_ROOM_DEG = 30.0      # the pour joints must leave J6 at least this much room to roll either way
+J4_MARGIN_DEG = 0.5            # ... and keep J4 this far inside its limits (taught: 89.1 of 90)
+
+
+def _ry(deg: float) -> np.ndarray:
+    a = math.radians(deg)
+    return np.array([[math.cos(a), 0.0, math.sin(a)], [0.0, 1.0, 0.0], [-math.sin(a), 0.0, math.cos(a)]])
+
+
+def _pour_ok(q) -> bool:
+    lo6, hi6 = M.JOINT_LIMITS_DEG[6]
+    lo4, hi4 = M.JOINT_LIMITS_DEG[4]
+    return (lo6 + POUR_ROLL_ROOM_DEG <= q[6] <= hi6 - POUR_ROLL_ROOM_DEG
+            and lo4 + J4_MARGIN_DEG <= q[4] <= hi4 - J4_MARGIN_DEG)
 
 
 def reachable_pour(p, R, seed) -> tuple[np.ndarray, dict]:
-    """(orientation, joints) for the pour pose at tip p: R itself when the arm can reach it, else R turned about the
-    vertical by the smallest angle (2.5 deg steps, MAX_HEADING_GIVE_DEG at most) that it can. The vial stays exactly
-    as upright as taught; only the pour direction turns a little. Raises PlanError if nothing reaches."""
-    steps = np.arange(2.5, MAX_HEADING_GIVE_DEG + 1e-9, 2.5)
-    worst = None
-    for give in [0.0, *[s * sign for s in steps for sign in (1, -1)]]:
-        Rg = T.yaw(give) @ np.asarray(R, float)
-        q, pe, ae = M.ik({**seed, 1: seed[1] + give}, p, Rg)
-        if pe <= M.POS_TOL_MM and ae <= M.ANG_TOL_DEG:
-            if give:
-                print(f"  pour pose: exact orientation out of reach here, gripper turned {give:+.1f} deg about vertical")
-            return Rg, dict(q)
-        worst = worst or (pe, ae)
-    raise M.PlanError(f"can't reach the pour pose at ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f}) mm, even turned "
-                      f"+-{MAX_HEADING_GIVE_DEG:g} deg (IK off by {worst[0]:.1f} mm / {worst[1]:.1f} deg)")
+    """(orientation, joints) for the pour pose at tip p: R itself when the arm reaches it, else the closest
+    reachable orientation (smallest heading turn + PITCH_COST x pitch, see above) with J6 free to roll for the pour.
+    Raises PlanError if nothing within MAX_HEADING_GIVE_DEG / MAX_PITCH_GIVE_DEG reaches."""
+    R = np.asarray(R, float)
+    cands = sorted(((g, b) for g in np.arange(-MAX_HEADING_GIVE_DEG, MAX_HEADING_GIVE_DEG + 1e-9, 2.5)
+                    for b in np.arange(-MAX_PITCH_GIVE_DEG, MAX_PITCH_GIVE_DEG + 1e-9, 5.0)),
+                   key=lambda c: (abs(c[0]) + PITCH_COST * abs(c[1]), abs(c[1])))
+    for g, b in cands:
+        Rg = T.yaw(g) @ R @ _ry(b)
+        for dq in ({}, {4: -25.0}, {5: 25.0}, {5: -25.0}):
+            s = {**seed, 1: seed[1] + g}
+            s.update({j: s[j] + d for j, d in dq.items()})
+            q, pe, ae = M.ik(s, p, Rg)
+            q = dict(q)
+            if pe <= M.POS_TOL_MM and ae <= M.ANG_TOL_DEG and _pour_ok(q):
+                if g or b:
+                    print(f"  pour pose: the exact orientation is out of reach here; closest reachable: gripper "
+                          f"turned {g:+.1f} deg about vertical, vial pitched {b:+.1f} deg along the gripper")
+                return Rg, q
+    raise M.PlanError(f"can't reach the pour pose at ({p[0]:.0f}, {p[1]:.0f}, {p[2]:.0f}) mm with any gripper "
+                      f"heading within +-{MAX_HEADING_GIVE_DEG:g} deg and pitch within +-{MAX_PITCH_GIVE_DEG:g} deg")
 
 
 def plan_pour_carry(vial: str, p, R, seed) -> tuple[list, dict, dict]:
