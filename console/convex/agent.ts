@@ -231,8 +231,8 @@ function remoteNote(label: string) {
 
 This conversation is NOT with the technician: it is with ${label}, another lab, writing through its agent (Fetch.ai
 ASI:One). They can't see this bench. Same loop: plan, check, request_approval. After request_approval tell them the plan
-is waiting for the technician at this bench (on a simulated bench they may reply "approve" themselves), and that you will
-message them when it runs and with the measured volumes. Give container numbers and vial letters with names. Your reply
+is waiting for the technician at this bench (on a simulated bench they may reply "approve" themselves), and that they can
+ask "status" any time for progress and, once it has run, the measured volumes. Never promise to message them later. Give container numbers and vial letters with names. Your reply
 is shown as chat text: two to four short sentences, plain text.`;
 }
 
@@ -342,7 +342,7 @@ export const chat = internalAction({
           else {
             await requestApproval(res.plan_id);
             await say(st.robot ? `Here's the plan to review. It can't run yet: ${st.robot}.`
-              : remote ? "The plan is checked and waiting for the technician at the bench to approve. I'll message you when it runs."
+              : remote ? "The plan is checked and waiting for the technician at the bench to approve. Ask \"status\" any time for progress and the measured volumes."
               : "Here's the plan. Approve or reject it.");
           }
         } else if (r.kind === "report") {

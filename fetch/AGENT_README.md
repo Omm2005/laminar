@@ -6,6 +6,9 @@
 pours measured volumes of liquid into containers. A camera reads how much actually went in, and you get the measured
 volumes back.
 
+**Use it for:** remote lab automation, liquid handling and dispensing, pouring or pipetting a measured volume,
+dilution series, dispensing QC, wet-lab experiments run by a robot arm, and camera-measured fill levels.
+
 ## What it does
 
 - **Understands lab requests**, for example "pour 1 mL of the blue dye into container 2", "0.5, 1 and 1.5 mL of red
@@ -25,7 +28,7 @@ volumes back.
 1. Ask: `Pour 1 mL of the blue dye into container 2 and tell me what the camera measures.`
 2. You get the checked plan. On the **real arm**, the technician approves it. On the **simulated bench** (demo mode),
    reply `approve` yourself.
-3. You get messages as it runs and when it finishes, with the measured volumes.
+3. Ask `status` after about a minute: you get the measured volume per container and the error against the target.
 
 Commands: `approve` (simulated bench only), `cancel` (withdraws your waiting plan), `status` (your last runs and
 results).

@@ -152,10 +152,11 @@ async def render(sender: str, rows: list[dict]) -> tuple[str, list[dict]]:
             hand = [s["label"] for s in args.get("steps") or [] if s.get("placeholder")]
             if hand:
                 lines.append(f"_{len(hand)} step(s) are done by hand by the operator (grab not recorded yet)._")
-            lines.append("This bench is **simulated**: reply **approve** to run it, or **cancel**."
+            lines.append("This bench is **simulated**: reply **approve** to run it (then ask **status** for the "
+                         "measured volumes), or **cancel**."
                          if bench.get("simulated") else
-                         "The technician at the bench approves it on the robot's dashboard; I'll message you when it "
-                         "runs. Reply **cancel** to withdraw it.")
+                         "The technician at the bench approves it on the robot's dashboard. Ask **status** any time for "
+                         "progress and the measured volumes, or reply **cancel** to withdraw it.")
             parts.append("\n".join(lines))
             events.append({"laminar_event": "plan_waiting", "plan_id": pid, "simulated": bool(bench.get("simulated")),
                            "pours": args.get("pours") or []})
@@ -194,39 +195,18 @@ async def answer(sender: str, since_ms: float) -> str:
     return (await render(sender, got))[0]
 
 
-def _pushed(r: dict, label: str) -> bool:
-    """For a person (ASI:One): which bench messages are worth an unprompted message: the result of a run, and the
-    technician's decision (their own approve / cancel was already answered)."""
-    if r.get("tool") == "run_summary":
-        return True
-    by = str((r.get("args") or {}).get("by", ""))
-    return r.get("tool") == "approval" and not (by.startswith(label) or by == "requester")
-
-
 @agent.on_interval(period=1.5)
 async def relay(ctx: Context):
-    """Send each watched requester what the bench said since last time (replies, plan, approval, results)."""
+    """Send each watched AGENT requester what the bench said since last time (replies, plan, approval, results).
+    People in ASI:One get no unprompted messages: ASI:One shows only replies to what they send (an unprompted one goes
+    to ASI:One's own assistant, which answers it), so they ask "status"."""
     now = time.time()
     keep = []
     for sender in ctx.storage.get("watch") or []:
         st = _state(ctx, sender)
         try:
-            if not st.get("machine"):                               # a person (ASI:One): one reply per message
-                st.setdefault("push_since", int(now * 1000))
-                rows = await call("query", "remote:replies", {"sender": sender, "since": st["push_since"]})
-                if rows:
-                    st["push_since"] = rows[-1]["at"]
-                    push = [r for r in rows if _pushed(r, st.get("label", ""))]
-                    if push:
-                        await ctx.send(sender, _msg((await render(sender, push))[0], end=True))
-                    st["active"] = now
-                runs = await call("query", "remote:runs", {"sender": sender, "limit": 3})
-                if any(r["status"] in OPEN for r in runs):
-                    st["active"] = now
-                _save(ctx, sender, st)
-                if now - st.get("active", now) < WATCH_IDLE_S:
-                    keep.append(sender)
-                continue
+            if not st.get("machine"):
+                continue                                             # people: see above
             rows = await call("query", "remote:replies", {"sender": sender, "since": st.get("since", 0)})
             if rows:
                 text, events = await render(sender, rows)
@@ -273,7 +253,6 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
     st.setdefault("label", "ASI:One user")
     st.setdefault("via", "asi-one")
     st.setdefault("since", int(time.time() * 1000) - 1000)
-    st.setdefault("push_since", int(time.time() * 1000))
     st["active"] = time.time()
     _save(ctx, sender, st)
     if not text:
@@ -299,8 +278,8 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
         if APPROVE.match(text) and (plan := await _open_plan(sender)):
             await call("mutation", "remote:approve", {"sender": sender, "jobId": plan["plan_id"]})
             if person:
-                await reply(f"Approved. The simulated robot is running plan {_short(plan['plan_id'])} now: I'll send the "
-                            "measured volumes when it finishes (about a minute), or ask \"status\".")
+                await reply(f"Approved. The simulated robot is running plan {_short(plan['plan_id'])} now; it takes about a "
+                            "minute. Then ask **status** for the measured volumes.")
             return                                                   # agents: the approval comes through relay()
         if CANCEL.match(text) and (plan := await _open_plan(sender)):
             await call("mutation", "remote:cancel", {"sender": sender, "jobId": plan["plan_id"]})
@@ -314,12 +293,19 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
                             "\"pour 1 mL of the blue dye into container 2\".")
             else:
                 lines = []
-                for r in runs:
+                for i, r in enumerate(runs):
+                    if i:                                            # older runs: one line each
+                        lines.append(f"Earlier: plan {_short(r['plan_id'])} ({r['request'][:60]}): {r['status'].replace('_', ' ')}")
+                        continue
                     lines.append(f"**Plan {_short(r['plan_id'])}** ({r['request'][:80]}): {r['status'].replace('_', ' ')}"
                                  + (f", approved by {r['approved_by']}" if r.get("approved_by") else "")
                                  + (f". {r['fail_reason']}" if r.get("fail_reason") else ""))
+                    if r.get("summary") and r["status"] not in OPEN:
+                        lines.append(r["summary"])
                     lines += _results_lines(r)
-                await reply("\n".join(lines))
+                if runs[0]["status"] in OPEN:
+                    lines.append("_Still in progress: ask **status** again in a little while._")
+                await reply("\n\n".join(lines))
             return
         session = str(ctx.session)                                   # a new chat (ASI:One): the assistant starts fresh
         new = session != st.get("session") or time.time() - st.get("last_ask", 0) > 600   # or 10 min quiet

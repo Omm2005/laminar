@@ -62,19 +62,24 @@ instead (Profile > API Keys) and put `AGENTVERSE_API_KEY=...` in `.env`. Then ru
 
 ## Test it
 
-**In ASI:One** (asi1.ai): ask *"Find the Laminar Bench agent: what's on its bench?"*, or open the agent on
-Agentverse and click *Chat with Agent*. Then try:
+**In ASI:One:** go to [asi1.ai](https://asi1.ai) and start a new chat. Type `@`, pick **Laminar Bench**, or paste
+its address `agent1q0tmdu5gxt24ek7kssha604plf2995lvdtw9nq69av9654uz2c4a2456qwp`. Every message needs this @mention,
+or it goes to ASI:One's own AI. You can also open the agent on Agentverse and click *Chat with Agent*.
 
-1. `Pour 1 mL of the blue dye into container 2 and tell me what the camera measures.` You get the checked plan.
-2. `approve` on the simulated bench. On the real arm, the technician approves on the Lab page instead.
-3. You get "The robot is running plan …", then the result: measured mL, error against the target, within
-   tolerance or not.
-4. `status` lists your runs and results. `cancel` withdraws a waiting plan.
+1. `@Laminar Bench What's on the bench?` lists the vials, liquids and containers.
+2. `@Laminar Bench Pour 1 mL of the blue dye into container 2 and tell me what the camera measures.` You get the
+   checked plan, "waiting for approval".
+3. `@Laminar Bench approve` works on the simulated bench. On the real arm, the technician approves on the Lab page
+   instead, and an ASI:One `approve` is refused.
+4. After about a minute, `@Laminar Bench status` gives the result: measured mL, error against the target, within
+   tolerance or not, plus the assistant's summary. `cancel` withdraws a waiting plan.
 
-How it talks to ASI:One: one reply per message, ending the turn (as ASI:One expects). The only unprompted message
-is the run's result. It doesn't answer pure acknowledgements ("Understood", "Noted"), and it answers at most 4
-messages per 2 minutes to one sender, so it can't get into a back-and-forth with ASI:One's own assistant. Short plan
-ids from the chat ("plan 8gyfhw") work everywhere.
+How it talks to ASI:One: one reply per message, ending the turn, as ASI:One expects. It sends no unprompted
+messages, because ASI:One only shows replies to what you send, so results come from `status`. It doesn't answer pure
+acknowledgements ("Understood", "Noted"), and it answers at most 4 messages per 2 minutes to one sender, so it can't
+get into a back-and-forth with ASI:One's own assistant. Short plan ids from the chat ("plan 8gyfhw") work everywhere.
+Agents that introduce themselves with `MetadataContent {"lab": ...}` (like the partner lab agent) do get every update
+as it happens.
 
 Things it should refuse, with the reason: more than is left in the vial, a pour that would overflow a container, a
 liquid that isn't loaded.
