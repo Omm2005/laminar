@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { DYE, STANDS, ago } from "./ui";
+import { MAX_POUR_ML, MIN_POUR_ML, WELL_CAPACITY_ML } from "../convex/lib";
 
 type Tube = "A" | "B" | "C" | "D";
 type Row = { tube: Tube; well: number; ml: number };
@@ -12,21 +13,27 @@ const STANDARD: Row[] = [
   { tube: "B", well: 1, ml: 0.5 }, { tube: "C", well: 2, ml: 0.5 }, { tube: "D", well: 3, ml: 0.5 },
 ];
 
+/** A pour as a percent of a full well, and back (mL is what is saved and sent; % is another way to type it). */
+const r2 = (x: number) => Math.round(x * 100) / 100;
+const toPct = (ml: number) => Math.round((ml / WELL_CAPACITY_ML) * 1000) / 10;
+const fromPct = (pct: number) => r2((pct / 100) * WELL_CAPACITY_ML);
+
 function parseCsv(text: string): Row[] {
   const alias: Record<string, Tube> = { a: "A", b: "B", c: "C", d: "D", red: "A", blue: "B", yellow: "C", green: "D" };
   const rows: Row[] = [];
   for (const line of text.split(/\r?\n/)) {
     const cells = line.split(/[,;\t]/).map((c) => c.trim().toLowerCase());
     if (cells.length < 3 || !alias[cells[0]]) continue;
-    const well = parseInt(cells[1].replace(/\D/g, "")), ml = parseFloat(cells[2]);
+    const well = parseInt(cells[1].replace(/\D/g, ""));
+    const ml = cells[2].endsWith("%") ? fromPct(parseFloat(cells[2])) : parseFloat(cells[2]);   // "50%" = half a well
     if (Number.isFinite(well) && Number.isFinite(ml)) rows.push({ tube: alias[cells[0]], well, ml });
   }
-  if (!rows.length) throw new Error("No rows found. Use one pour per line: tube,well,ml (for example A,1,1.0).");
+  if (!rows.length) throw new Error("No rows found. Use one pour per line: tube,well,ml or tube,well,% (for example A,1,1.0 or A,1,50%).");
   return rows;
 }
 
 /** The segmented fill-after bar: shows every pour already assigned to that well, stacked by liquid colour. */
-function FillAfter({ rows, upToIndex, well, cap = 3 }: { rows: Row[]; upToIndex: number; well: number; cap?: number }) {
+function FillAfter({ rows, upToIndex, well, cap = WELL_CAPACITY_ML }: { rows: Row[]; upToIndex: number; well: number; cap?: number }) {
   const segs = rows.slice(0, upToIndex + 1).filter((r) => r.well === well);
   const total = segs.reduce((s, r) => s + r.ml, 0);
   return (
@@ -36,7 +43,7 @@ function FillAfter({ rows, upToIndex, well, cap = 3 }: { rows: Row[]; upToIndex:
           <span key={i} style={{ width: `${Math.min(1, r.ml / cap) * 100}%`, background: DYE[r.tube], display: "inline-block", height: "100%" }} />
         ))}
       </div>
-      <div className="fill-cap">{total.toFixed(1)} / {cap.toFixed(1)} mL</div>
+      <div className="fill-cap">{total.toFixed(1)} / {cap.toFixed(1)} mL · {Math.round((total / cap) * 100)}%</div>
     </div>
   );
 }
@@ -96,6 +103,7 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
                   <th scope="col">Liquid</th>
                   <th scope="col">Well</th>
                   <th scope="col" className="num">Target mL</th>
+                  <th scope="col" className="num" title={`Percent of a full well (${WELL_CAPACITY_ML} mL)`}>% of well</th>
                   <th scope="col" style={{ minWidth: 140 }}>Well fill after</th>
                   <th scope="col" style={{ width: 32 }} aria-label="Remove"></th>
                 </tr>
@@ -122,8 +130,13 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
                     </td>
                     <td className="num">
                       <input className="input num" style={{ width: 86, textAlign: "right", padding: "7px 10px" }}
-                        type="number" step="0.1" min="0.2" max="2" value={r.ml}
+                        type="number" step="0.1" min={MIN_POUR_ML} max={MAX_POUR_ML} value={r.ml}
                         onChange={(e) => set(i, { ml: +e.target.value })} aria-label="Target mL" />
+                    </td>
+                    <td className="num">
+                      <input className="input num" style={{ width: 78, textAlign: "right", padding: "7px 10px" }}
+                        type="number" step="1" min={toPct(MIN_POUR_ML)} max={toPct(MAX_POUR_ML)} value={toPct(r.ml)}
+                        onChange={(e) => set(i, { ml: fromPct(+e.target.value) })} aria-label="Percent of a full well" />
                     </td>
                     <td style={{ minWidth: 140 }}>
                       <FillAfter rows={rows} upToIndex={i} well={r.well} />
@@ -133,7 +146,7 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
                     </td>
                   </tr>
                 ))}
-                {rows.length === 0 && <tr><td colSpan={7} className="muted" style={{ padding: 20 }}>Add a pour, start from the standard assay, or import a CSV.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 20 }}>Add a pour, start from the standard assay, or import a CSV.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -142,7 +155,7 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
             <button type="button" className="btn tertiary" onClick={() => { setRows(STANDARD); setTitle("Standard assay"); setId(null); }}>Standard assay</button>
             <label className="btn tertiary" htmlFor="csv" style={{ cursor: "pointer" }}>Import CSV</label>
             <input id="csv" type="file" accept=".csv,text/csv,text/plain" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); e.target.value = ""; }} />
-            <span className="t-label" style={{ color: "var(--ink-3)", flex: "1 1 200px" }}>tube,well,ml · liquid names work too: red,1,1.0</span>
+            <span className="t-label" style={{ color: "var(--ink-3)", flex: "1 1 200px" }}>tube,well,ml or tube,well,% · liquid names work too: red,1,1.0 or red,1,50%</span>
             {file && <span className="chip">from {file.name}</span>}
             {current?.sourceUrl && !file && <a className="chip" href={current.sourceUrl} target="_blank" rel="noreferrer">source: {current.sourceName}</a>}
             <button type="button" className="btn primary reagent" disabled={!name.trim()} onClick={() => act(persist)}>{id ? "Save new version" : "Save protocol"}</button>
