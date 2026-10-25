@@ -117,6 +117,25 @@ def load_offsets(path=OFFSETS_FILE) -> dict:
     return {int(k): v for k, v in (yaml.safe_load(path.read_text()) or {}).get("containers", {}).items()}
 
 
+TILT_SPEED_DEG_S = 10.0   # wrist roll speed for the sample pour
+TILT_HOLD_S = 2.0         # held tilted this long
+
+
+def into_tray(pose: dict) -> np.ndarray:
+    """Unit (x, y): across the tray line, away from the arm base: from the marker strip into the containers."""
+    th = math.radians(float(pose["heading_deg"]))
+    n = np.array([-math.sin(th), math.cos(th)])
+    return n if float(n @ np.asarray(pose["xy"], float)) >= 0.0 else -n
+
+
+def tilt_sign(q, direction) -> float:
+    """+1 or -1: which way to roll J6 at joints q so the top of the vial (tool z) tips along `direction` (x, y).
+    The tip sits on the roll axis, so only the vial's top moves."""
+    _, R = M.fk_mm(q)
+    _, R2 = M.fk_mm({**q, 6: q[6] + 5.0})
+    return 1.0 if float((R2[:, 2] - R[:, 2])[:2] @ np.asarray(direction, float)) >= 0.0 else -1.0
+
+
 def pour_pose(pose: dict, cont: int, offsets: dict) -> tuple[np.ndarray, np.ndarray, dict]:
     """Where the gripper goes over container `cont` for the tray seen now: (tip mm, orientation 3x3, IK seed joints).
     The learned offset turned and moved with the tray; the height is the learned one."""
@@ -221,6 +240,8 @@ def main() -> None:
     ap.add_argument("--image", help="without --run: find the tray in this scan-pose photo")
     ap.add_argument("--dj1", type=float, default=0.0, help="with --image: the base was turned this much (deg)")
     ap.add_argument("--camera", type=int, default=T.CAMERA)
+    ap.add_argument("--tilt", type=float, default=0.0,
+                    help="sample pour at the pour pose: roll the wrist (J6) this many deg, vial top towards the tray")
     a = ap.parse_args()
     learning = a.job == "learn-offsets"
     vial, cont = (None, None) if learning else parse(a.job)
@@ -281,6 +302,21 @@ def main() -> None:
             err, _ = T.settle_on(client, p_pour)
             print(f"at the pour pose over container {'abcd'[cont - 1]} (tip within {err:.1f} mm): holding 2 s")
             T.time.sleep(2.0)
+            if a.tilt:
+                q_hold = client.current_joints()
+                sign = tilt_sign(q_hold, into_tray(pose))
+                q_tilt = {**q_hold, 6: q_hold[6] + sign * abs(a.tilt)}
+                lo6, hi6 = M.JOINT_LIMITS_DEG[6]
+                if not lo6 <= q_tilt[6] <= hi6:
+                    raise M.PlanError(f"tilt: J6 would go to {q_tilt[6]:.1f} deg, outside [{lo6}, {hi6}]")
+                print(f"  sample pour: wrist roll {sign * abs(a.tilt):+.0f} deg (vial top towards the tray), "
+                      f"hold {TILT_HOLD_S:g} s")
+                client._send({"op": "move", "joints": {str(j): v for j, v in q_tilt.items()},
+                              "speed": TILT_SPEED_DEG_S})
+                T.time.sleep(TILT_HOLD_S)
+                client._send({"op": "move", "joints": {str(j): v for j, v in q_hold.items()},
+                              "speed": TILT_SPEED_DEG_S})
+                print("  wrist back upright")
             back = M.plan_line(client.current_joints(), p_pour, None, speed_mm_s=10.0, label="undo the sag nudge")
             print("  " + str(client.run(back).get("result")))
             for mv in reversed(moves):
