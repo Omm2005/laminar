@@ -357,6 +357,21 @@ def main(argv=None) -> None:
             _phase("settle")
             p_hold, _ = M.fk_mm(client.current_joints())
             err, _ = T.settle_on(client, p_pour)
+            # wrist-camera alignment (servo.py): make the tray's markers look as they did at the pour pose taught for
+            # this container: the gripper ends where it was taught relative to the tray, wherever the tray is
+            import servo
+            key = "abcd"[cont - 1]
+            if key in servo.load_refs():
+                _phase("align")
+                servo.align(client, key)
+                vo = load_vial_offsets().get(vial)
+                if vo and any(vo):        # the reference was taught with vial A: this vial sits differently
+                    d = T.rot(float(pose["heading_deg"])) @ np.asarray(vo, float)
+                    print(f"  {vial}: its own correction ({vo[0]:+.1f}, {vo[1]:+.1f}) mm along/across the tray")
+                    q_ = client.current_joints()
+                    p_, _ = M.fk_mm(q_)
+                    client.run(M.plan_line(q_, p_ + np.array([d[0], d[1], 0.0]), None, speed_mm_s=10.0,
+                                           label="vial correction"))
             print(f"at the pour pose over container {'abcd'[cont - 1]} (tip within {err:.1f} mm): holding 2 s")
             T.time.sleep(2.0)
             if HOOKS["pour"]:
