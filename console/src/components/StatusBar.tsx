@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { Link } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 
 const STALE_MS = 2000;
@@ -20,7 +21,7 @@ function statusLabel(status: string): string {
 function stepInWords(
   status: string,
   stepName: string | null | undefined,
-  job: { channel: number; vial: number; targetMl: number } | null,
+  job: { channel: number; vial: number; targetMl: number; plan?: { label?: string }[] } | null,
   poured: number | null,
 ): string {
   if (status === "awaiting_approval") return "Waiting for approval";
@@ -31,7 +32,11 @@ function stepInWords(
   if (status === "failed")    return "Failed";
   if (status === "stalled")   return "Stalled";
   if (status === "estop")     return "Stopped";
+  if (status === "rejected")  return "Rejected, nothing moved";
   if (!job) return "Idle";
+  // agent plans (Lab page): currentStep is "<index>:<skill>"; the plan has the words
+  const idx = stepName && /^\d+:/.test(stepName) ? Number(stepName.split(":")[0]) : -1;
+  if (idx >= 0 && job.plan?.[idx]?.label) return job.plan[idx].label!;
   const V = vialLetter(job.vial);
   const C = job.channel;
   switch (stepName) {
@@ -60,7 +65,6 @@ export default function StatusBar() {
   const stopState = useQuery(api.control.stopRequested, {});
   const estop = useMutation(api.control.estop);
   const clearStop = useMutation(api.control.clearStop);
-  const approve = useMutation(api.jobs.approve);
 
   // tick every 500 ms so the latency / staleness badges don't go stale themselves
   const [, setTick] = useState(0);
@@ -89,10 +93,7 @@ export default function StatusBar() {
       <div className="sb-center">{stepInWords(status, activeJob?.currentStep, activeJob, poured)}</div>
       <div className="sb-right">
         {activeJob?.status === "awaiting_approval" && (
-          <button className="btn-primary"
-                  onClick={() => approve({ jobId: activeJob._id, approvedBy: "hema" })}>
-            Approve
-          </button>
+          <Link className="btn-primary" to="/lab">Review the plan</Link>
         )}
         {stopped ? (
           <button className="btn-stop-mini" onClick={() => clearStop({ source: "web" })}>Clear stop</button>

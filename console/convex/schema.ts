@@ -11,7 +11,7 @@ const JOB_STATUS = v.union(
   v.literal("done"),
   v.literal("failed"),
   v.literal("stalled"),
-  v.literal("estop"),
+  v.literal("estop"), v.literal("rejected"),
 );
 
 export default defineSchema({
@@ -32,9 +32,17 @@ export default defineSchema({
         v.object({
           name: v.string(),
           args: v.optional(v.any()),
+          label: v.optional(v.string()),        // what the dashboard shows ("Pour 1.0 mL into Sample 2")
+          placeholder: v.optional(v.boolean()), // a step the robot can't do for real yet
         }),
       ),
     ),
+    // agent plans: every pour, in dashboard terms (vial slot, container number); the robot gets ids only
+    pours: v.optional(v.array(v.object({ vial: v.number(), container: v.number(), ml: v.number() }))),
+    threadId: v.optional(v.string()),
+    approvedVia: v.optional(v.string()),        // "button" | "voice" | "chat"
+    report: v.optional(v.any()),                // the executor's run report
+    summary: v.optional(v.string()),            // the agent's plain-words explanation afterwards
   })
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"]),
@@ -145,6 +153,41 @@ export default defineSchema({
     })),
     createdAt: v.number(),
   }).index("by_thread_t", ["threadId", "createdAt"]),
+
+  /** Singleton: what the bench computer (bridge/run_plan.py) sees, reported every second. Absent or old = the
+      bench computer is not connected. */
+  benchStatus: defineTable({
+    t: v.number(),
+    simulated: v.boolean(),
+    arm: v.object({ connected: v.boolean(), detail: v.string() }),
+    camera: v.object({ connected: v.boolean(), detail: v.string() }),
+    model: v.object({ loaded: v.boolean(), detail: v.string() }),
+    calibration: v.object({ done: v.boolean(), detail: v.string() }),
+    readHz: v.optional(v.number()),
+    // what the camera + model read in each calibrated box (container n = box n, left to right)
+    containers: v.array(v.object({ number: v.number(), box: v.string(), ml: v.number(), conf: v.number(),
+                                   capacityMl: v.number(), reachable: v.boolean() })),
+    notReady: v.array(v.string()),
+    grabs: v.optional(v.array(v.string())),     // vials whose grab is recorded (robotics/paths); others are placeholders
+    frameId: v.optional(v.id("_storage")),     // camera picture with the boxes and levels drawn on
+    rawFrameId: v.optional(v.id("_storage")),  // the same picture, clean: what calibration is drawn on
+    calibFrameId: v.optional(v.id("_storage")), // the picture at calibration, boxes numbered 1..n (Claude looks at it)
+    frameW: v.optional(v.number()),            // camera resolution, px (box coordinates are in these)
+    frameH: v.optional(v.number()),
+    camIndex: v.optional(v.string()),
+    streamPort: v.optional(v.number()),        // live MJPEG video served by the bench computer itself
+    boxes: v.optional(v.array(v.array(v.number()))),   // current calibration [x, y, w, h], left to right
+    busy: v.optional(v.string()),              // "running a plan"
+  }),
+
+  /** Requests from the dashboard to the bench computer, e.g. { kind: "calibrate" }. */
+  benchCommands: defineTable({
+    kind: v.string(),                     // "set_boxes" {boxes} | "set_camera" {index}
+    args: v.optional(v.any()),
+    status: v.string(),                   // pending | running | done | failed
+    message: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_status", ["status"]),
 
   /** Technician-tunable key/value settings (e.g. tolerance_ml). */
   settings: defineTable({

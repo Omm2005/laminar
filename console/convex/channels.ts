@@ -42,3 +42,12 @@ export const addPoured = mutation({
     });
   },
 });
+
+/** Name a container (the bench setup by Claude, or a person). */
+export const rename = mutation({
+  args: { number: v.number(), contents: v.string() },
+  handler: async (ctx, args) => {
+    const ch = await ctx.db.query("channels").withIndex("by_number", (q) => q.eq("number", args.number)).first();
+    if (ch) await ctx.db.patch(ch._id, { contents: args.contents, updatedAt: Date.now() });
+  },
+});

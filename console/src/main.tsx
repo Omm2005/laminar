@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import App from "./App.tsx";
 import "./index.css";
+import "./ui.css";
 
 const url = import.meta.env.VITE_CONVEX_URL as string | undefined;
 if (!url) {
