@@ -455,10 +455,10 @@ def plan_shift(q_now, dxy_mm, *, speed_mm_s: float = DEFAULT_TRAVEL_SPEED, label
                      label=label or f"shift ({dx:+.0f}, {dy:+.0f}) mm", workspace_mm=workspace_mm)
 
 
-# Heights for the vial -> compartment round trip (mm). Lifting 100 then lowering 60 puts the pour
+# Heights for the vial -> compartment round trip (mm). Lifting 150 then lowering 110 puts the pour
 # pose 40 mm above the grab pose, which clears the compartment walls; the return reverses both.
-TRANSFER_LIFT_MM = 100.0
-TRANSFER_LOWER_MM = 60.0
+TRANSFER_LIFT_MM = 150.0
+TRANSFER_LOWER_MM = 110.0
 
 
 def plan_transfer(q_grab, dxy_mm, *, lift_mm: float = TRANSFER_LIFT_MM, lower_mm: float = TRANSFER_LOWER_MM,

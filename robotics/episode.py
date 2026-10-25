@@ -10,7 +10,7 @@
 
 Replay = the recorded rest -> A segment of the episode, gripper included (leading idle frames skipped,
 slowed if any joint would exceed arm_server's path speed limit), then
-lift 100 mm -> travel in that locked horizontal plane to above B -> lower onto B's height.
+lift 150 mm -> travel in that locked horizontal plane to above B -> lower onto B's height.
 The travel keeps A's uprightness and takes only B's turn about vertical (hand-taught poses are never
 exactly upright, and the planner refuses tilt changes over 3 deg).
 
@@ -35,8 +35,8 @@ from arm_client import ArmClient
 
 HERE = FilePath(__file__).resolve().parent
 RECORDINGS = HERE / "recordings"
-LIFT_MM = 100.0
-MIN_LOWER_MM = 60.0   # the carry runs at least this far above B, so the last move is always a real lower
+LIFT_MM = 150.0
+MIN_LOWER_MM = 110.0  # the carry runs at least this far above B, so the last move is always a real lower
 REPLAY_MAX_DEG_S = 80.0  # arm_server refuses path steps over 90 deg/s
 IDLE_DEG = 0.5           # leading frames within this of frame 0 are skipped
 

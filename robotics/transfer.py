@@ -202,7 +202,7 @@ def main() -> None:
         dxy = route(layout, a.vial, a.compartment)
     except (KeyError, ValueError) as e:
         sys.exit(f"NOT MOVING: {e}")
-    lift_mm, lower_mm = float(layout.get("lift_mm", 100)), float(layout.get("lower_mm", 60))
+    lift_mm, lower_mm = float(layout.get("lift_mm", 150)), float(layout.get("lower_mm", 110))
     direction = pour_direction(cfg, a.side)
     column = camera_column(cfg, a.compartment)
 
