@@ -6,7 +6,7 @@ import markers as T
 
 
 def test_parse_jobs():
-    assert D.parse("A2c") == ("vial_A", 3) and D.parse("d2A") == ("vial_D", 1)
+    assert D.parse("A2c") == ("vial_A", 3) and D.parse("c2B") == ("vial_C", 2)
     with pytest.raises(SystemExit):
         D.parse("E2a")
 
