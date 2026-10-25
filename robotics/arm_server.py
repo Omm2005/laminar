@@ -77,6 +77,7 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
+STARTUP_FEEDBACK_S = 1.0   # right after enabling, a motor's first reply can be late: no lost-feedback stop yet
 # Lost feedback never drops the arm: hold the commanded pose with torque for FEEDBACK_GRACE_S waiting for it to come
 # back, then ease to rest on commands alone (the motors still obey commands when only the replies are lost), and
 # disable only once the arm has been brought to rest. If the return to rest can't finish, the motors are LEFT
@@ -164,6 +165,7 @@ def main():
         return all(mid in bus.state and now - bus.state[mid]["t"] <= FEEDBACK_TIMEOUT for mid in ids)
 
     reenabled: dict[int, float] = {}
+    startup = {"until": 0.0}   # time.time() until which a missing/late first reply is not yet "lost feedback"
 
     def check():
         if resting["now"]:  # going to rest is the safe outcome of every fault: let it finish
@@ -171,8 +173,10 @@ def main():
         now = time.time()
         for mid in ids:
             st = bus.state.get(mid)
-            if st is None or now - st["t"] > FEEDBACK_TIMEOUT:
+            if (st is None or now - st["t"] > FEEDBACK_TIMEOUT) and now > startup["until"]:
                 raise RuntimeError(f"lost feedback from J{mid}")
+            if st is None:
+                continue
             if st["fault"]:
                 raise RuntimeError(f"J{mid} fault 0x{st['fault']:02x}")
             if st["temp"] > TEMP_LIMIT_C:
@@ -512,6 +516,7 @@ def main():
         for mid in ids:
             bus.enable(mid)
         enabled = True
+        startup["until"] = time.time() + STARTUP_FEEDBACK_S
         hold(0.5)
         idle = [m for m in ids if bus.state.get(m, {}).get("mode") not in (None, RUN_MODE)]
         for _ in range(3):           # make sure every motor (the gripper too) really is running before any command
@@ -523,6 +528,8 @@ def main():
             idle = [m for m in ids if bus.state.get(m, {}).get("mode") not in (None, RUN_MODE)]
         if idle:
             raise RuntimeError(f"motors not in run mode after enabling: {idle}")
+        hold(max(0.0, startup["until"] - time.time()) + 0.1)   # every motor must be replying before "ready"
+        startup["until"] = 0.0
         last["result"] = "ready, holding"
         write_status()
         print("arm_server ready", flush=True)
