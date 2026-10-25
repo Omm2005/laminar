@@ -1,0 +1,49 @@
+# Follower joint angles in DEGREES from the calibrated zero pose (same frame as arm_server).
+# Fill J1..J6 by hand (or save from jog.py: press S, type the pose name).
+# gripper: 0 = fully closed (follower zero), higher = more open. Optional (null = don't move).
+# Angles are passed through arm_server's LIMITS clamp before any move.
+
+home:                  # arm folded, gripper closed. The resting pose we return to.
+  J1: 0.0              # shoulder pan
+  J2: 0.0              # shoulder lift
+  J3: 0.0              # elbow flex
+  J4: 0.0              # wrist flex
+  J5: 0.0              # wrist yaw
+  J6: 0.0              # wrist roll
+  gripper: 0.0         # closed
+
+vial_1_above:          # a few cm above vial 1, gripper open, ready to descend straight down
+  J1: 0.0
+  J2: 0.0
+  J3: 0.0
+  J4: 0.0
+  J5: 0.0
+  J6: 0.0
+  gripper: 60.0        # open enough to clear the 17 mm OD tube
+
+vial_1_grasp:          # jaws straddling the vial at the gripping height, still open
+  J1: 0.0
+  J2: 0.0
+  J3: 0.0
+  J4: 0.0
+  J5: 0.0
+  J6: 0.0
+  gripper: 60.0
+
+channel_1_above:       # a few cm above reservoir channel 1, vial held, lip clear of other channels
+  J1: 0.0
+  J2: 0.0
+  J3: 0.0
+  J4: 0.0
+  J5: 0.0
+  J6: 0.0
+  gripper: null        # keep whatever grip we have
+
+channel_1_pour:        # vial lip just over channel 1 at the lowered height, pre-tilt
+  J1: 0.0
+  J2: 0.0
+  J3: 0.0
+  J4: 0.0
+  J5: 0.0
+  J6: 0.0
+  gripper: null

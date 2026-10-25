@@ -1,0 +1,22 @@
+# Pour mechanics. All angles in degrees of pour_joint from the follower zero pose.
+# flow_table_ml_per_s maps { angle_deg: measured mL/s at that angle }.
+# `direction` is +1 if increasing the joint angle tilts the vial lip DOWN (pours out),
+# -1 if decreasing it does. Determine with jog.py once a vial is held.
+
+pour_joint: 6              # from robotics/bench.yaml:25 and the B601-RS joint map (joint6 = wrist_roll)
+direction: +1              # UNVERIFIED — flip after seeing which way J6 pours in jog.py
+
+rest_deg: 0.0              # upright. No prior data; vial-vertical is J6=0 given the grasp orientation.
+onset_deg: 55.0            # SIMULATED: software/laminar/skills.py:81 "blue" onset = 0.95 rad = 54.4 deg.
+                           # Verify with the real 17 mm Corning tube; shortened lip may need less tilt.
+pour_deg: 65.0             # SIMULATED: software/laminar/skills.py:82 "red" onset = 1.10 rad = 63 deg;
+                           # rounded up for a usable aggressive flow. Verify.
+
+tilt_speed_deg_s: 10.0     # placeholder, slow enough to not sling liquid
+lead_ml: 0.3               # placeholder, retune from pours.jsonl after a few runs
+
+flow_table_ml_per_s:       # starting rates aligned to the simulated onset above. Everything is a
+                           # guess — adaptive_pour prints measured mL/s after each pour; edit by hand.
+  55: 0.3                  # just past onset: trickle
+  65: 1.0                  # pour_deg default
+  75: 2.0                  # aggressive, if pour_deg steps up

@@ -1,0 +1,17 @@
+# 12-channel reagent reservoir. Channels are numbered 1..12 from the LEFT (looking down at it).
+# capacity_ml is the volume at which each trough is considered full (used to resolve "half of channel N"
+# into mL). All 12 start the same; edit any individually if a trough geometry differs.
+
+channels:
+  1:  { capacity_ml: 10.0 }
+  2:  { capacity_ml: 10.0 }
+  3:  { capacity_ml: 10.0 }
+  4:  { capacity_ml: 10.0 }
+  5:  { capacity_ml: 10.0 }
+  6:  { capacity_ml: 10.0 }
+  7:  { capacity_ml: 10.0 }
+  8:  { capacity_ml: 10.0 }
+  9:  { capacity_ml: 10.0 }
+  10: { capacity_ml: 10.0 }
+  11: { capacity_ml: 10.0 }
+  12: { capacity_ml: 10.0 }
