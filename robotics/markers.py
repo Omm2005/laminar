@@ -69,6 +69,9 @@ STATE_MAX_AGE_S = 1.0  # teleop_state.json older than this = teleop.py is not ru
 MOVE_SPEED = 15.0      # deg/s for the joint move to the scan pose
 SWEEP_DEG = (0, 25, -25, 50, -50)  # visit: base turns (J1, from the scan pose) tried until the tray is seen
 LOCK_PHOTOS = 2        # visit: photos at the angle where the tray is first seen; their poses are averaged
+CORRECT_TOL_MM = 2.0   # visit: after each lower, nudge until the MEASURED tip is this close to the target ...
+CORRECT_ITERS = 3      # ... in at most this many small moves ...
+CORRECT_MAX_MM = 60.0  # ... never commanding the tip further than this from where it was planned
 
 
 def detect_markers(image) -> list[tuple[int, np.ndarray]]:
@@ -591,6 +594,33 @@ def _plan_visit(q_scan, containers, table_z, workspace, tilt, hover_mm=HOVER_MM)
     return plans
 
 
+def settle_on(client, target_mm, log=print) -> float:
+    """Close the loop on the encoders: the arm sags under load (J3 ~2.5 deg, J4 ~2 deg at the tray, measured in
+    Tiger), so the tip stops ~17 mm short and ~35 mm low of the commanded point. Read where the tip really is,
+    move the command by the difference, repeat. Returns the final error (mm, measured)."""
+    target = np.asarray(target_mm, dtype=float)
+    planned, _ = M.fk_mm(client.current_joints())
+    err = float("inf")
+    for k in range(CORRECT_ITERS + 1):
+        time.sleep(0.5)  # let the arm settle before reading it
+        st = client.status()
+        p_meas, _ = M.fk_mm({j: float(st["state"][f"J{j}"]) for j in range(1, 7)})
+        miss = target - p_meas
+        err = float(np.linalg.norm(miss))
+        log(f"    measured tip {err:.1f} mm from the target ({miss[0]:+.1f}, {miss[1]:+.1f}, {miss[2]:+.1f})")
+        if err <= CORRECT_TOL_MM or k == CORRECT_ITERS:
+            break
+        q_cmd = client.current_joints()
+        p_cmd, _ = M.fk_mm(q_cmd)
+        goal = p_cmd + miss
+        if np.linalg.norm(goal - planned) > CORRECT_MAX_MM:
+            log(f"    not correcting further: the command would move {np.linalg.norm(goal - planned):.0f} mm "
+                f"from the plan (> {CORRECT_MAX_MM:g})")
+            break
+        client.run(M.plan_line(q_cmd, goal, None, speed_mm_s=10.0, label=f"correct {err:.0f} mm"))
+    return err
+
+
 def cmd_visit(a) -> None:
     calib = load_calib()
     bench = yaml.safe_load(BENCH_FILE.read_text()) if BENCH_FILE.exists() else {}
@@ -652,6 +682,9 @@ def cmd_visit(a) -> None:
             if client:
                 input("  Enter to move ")
                 print("  " + str(client.run(p).get("result")))
+        if client:  # at the hover point: make the MEASURED tip land there, not just the command
+            p_goal, _ = M.fk_mm(moves[-1].final_joints)
+            settle_on(client, p_goal)
     print("\ndone" + (": arm_server is holding above the last container (python arm_cmd.py rest to rest)"
                       if client else " (print only: add --run to move)"))
 

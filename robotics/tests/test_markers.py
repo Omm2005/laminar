@@ -127,3 +127,24 @@ def test_lock_in_averages_two_detections():
     assert pose["seen"] == [10, 11, 12, 13] and pose["spread_mm"] < 2.0
     for i, cont in T.MARKERS.items():
         assert np.linalg.norm(pose["containers"][cont] - true[i]) < 1.5
+
+
+def test_settle_on_cancels_a_steady_sag(monkeypatch):
+    import motion as M
+    q0 = {1: -30.0, 2: 110.0, 3: 60.0, 4: 30.0, 5: 0.0, 6: 0.0}
+    target, _ = M.fk_mm(q0)
+    sag = {1: 0.0, 2: 0.5, 3: -2.5, 4: -1.8, 5: 0.0, 6: 0.0}   # what the real arm does under load
+
+    class FakeArm:
+        def __init__(self):
+            self.cmd = dict(q0)
+        def current_joints(self):
+            return dict(self.cmd)
+        def status(self):
+            return {"state": {f"J{j}": self.cmd[j] + sag[j] for j in range(1, 7)}}
+        def run(self, path):
+            self.cmd = dict(path.final_joints)
+
+    monkeypatch.setattr(T.time, "sleep", lambda s: None)
+    err = T.settle_on(FakeArm(), target, log=lambda *a: None)
+    assert err <= T.CORRECT_TOL_MM
