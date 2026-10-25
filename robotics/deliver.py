@@ -275,8 +275,14 @@ def main() -> None:
             grab.play(vial, run=True)
             for mv in moves:
                 print("  " + str(client.run(mv).get("result")))
-            print(f"at the pour pose over container {'abcd'[cont - 1]}: holding 2 s")
+            # the arm sags by a pose-dependent amount (20 mm down at a stretched pose): put the MEASURED tip on the
+            # pour point, then take the nudge back out before reversing the planned moves
+            p_pour, _ = M.fk_mm(moves[-1].final_joints)
+            err, _ = T.settle_on(client, p_pour)
+            print(f"at the pour pose over container {'abcd'[cont - 1]} (tip within {err:.1f} mm): holding 2 s")
             T.time.sleep(2.0)
+            back = M.plan_line(client.current_joints(), p_pour, None, speed_mm_s=10.0, label="undo the sag nudge")
+            print("  " + str(client.run(back).get("result")))
             for mv in reversed(moves):
                 print("  " + str(client.run(reverse_path(mv)).get("result")))
             grab.play(vial, run=True, reverse=True)
