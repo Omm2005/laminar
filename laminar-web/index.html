@@ -1,1 +1,1442 @@
-file:///Users/erin/laminar-web/index.html
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Laminar</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500;600;700;800&family=Unbounded:wght@300;400;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* ──────────────────────────────────────────────────────────────────────────
+   LAMINAR
+   Layout: a measured grid, a headline at instrument scale, and the workcell
+   running full-bleed behind it. Everything a non-reader needs is a moving
+   number: the phase list ticks down, the volume counts up, the bar fills.
+   Palette is built out of the reagent: petrol, jade, mint, on warm bone.
+   Light bands alternate with two night bands and one sand band.
+   ────────────────────────────────────────────────────────────────────── */
+:root{
+  --paper:#F3F1EC;             /* warm bone, not grey */
+  --paper-2:#E8E4DA;
+  --night:#0F1618;
+  --card:var(--paper);
+  --panel:rgba(255,255,255,.72);
+  --ink:#0A0E10;
+  --ink-2:#2A3234;
+  --ink-3:#5C6769;
+  --rule:rgba(10,14,16,.26);
+  --rule-2:rgba(10,14,16,.13);
+  --grid:rgba(18,23,26,.04);
+  --accent:#0F4C5C;
+  --accent-2:#3A4146;
+  --reagent:#0F4C5C;           /* the dyed reagent — the spine of the palette */
+  --jade:#2F6F62;
+  --mint:#6FCBB8;
+  --indigo:#2B3A5E;
+  --slate:#5B6B71;
+  --sans:'Archivo',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --col:1280px;
+  --display:'Unbounded'; --dsize:.78;  --dtrack:-.055em; --dweight:800; --dline:1.04;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;font-family:var(--sans);color:var(--ink);line-height:1.5;
+  background:var(--paper);-webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+.wrap{
+  width:100%;max-width:var(--col);margin-inline:auto;position:relative;z-index:2;
+  padding-left:max(20px,env(safe-area-inset-left,0px));
+  padding-right:max(20px,env(safe-area-inset-right,0px));
+}
+section{position:relative;z-index:1}
+.band{border-top:1px solid var(--rule)}
+.band>.wrap{padding-block:clamp(64px,8.5vw,128px)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── type ─────────────────────────────────────────────────────────────── */
+h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.035em;text-wrap:balance}
+h1{font-family:var(--display),var(--sans);font-weight:var(--dweight);
+  font-size:calc(clamp(38px,6.2vw,86px) * var(--dsize));line-height:var(--dline);letter-spacing:var(--dtrack)}
+h2{font-family:var(--display),var(--sans);font-size:clamp(21px,2.3vw,32px);line-height:1.24;letter-spacing:-.05em;font-weight:700}
+h3{font-size:16px;font-weight:700;letter-spacing:-.015em;line-height:1.35}
+p{margin:0;color:var(--ink-2)}
+.lede{font-size:clamp(15.5px,1.25vw,18px);line-height:1.62;max-width:52ch}
+.eyebrow{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--ink-2);display:flex;align-items:center;gap:11px}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--rule)}
+
+/* ── top bar ──────────────────────────────────────────────────────────── */
+.top{border-bottom:1px solid var(--rule);background:rgba(243,241,236,.88);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);position:relative;z-index:6}
+.top .wrap{display:flex;align-items:center;gap:18px;padding-block:14px;flex-wrap:wrap}
+.mark{font-family:var(--display),var(--sans);font-weight:800;letter-spacing:-.06em;font-size:18px;display:flex;align-items:center;gap:9px}
+.mark svg{display:block;width:26px;height:14px}
+.top nav{display:flex;gap:24px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-2);margin-left:auto}
+.top nav{font-weight:500}
+.top nav a{color:inherit;text-decoration:none;white-space:nowrap}
+.top nav a:hover{color:var(--ink)}
+.btn{font-family:var(--mono);font-size:11.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
+  border-radius:999px;padding:11px 20px;border:1px solid transparent;cursor:pointer;
+  display:inline-flex;align-items:center;gap:9px;transition:background .15s ease,color .15s ease,border-color .15s ease}
+.btn-primary{background:var(--reagent);color:#fff;border-color:var(--reagent)}
+.btn-primary:hover{background:#0A3A47;border-color:#0A3A47}
+.btn-ghost:hover{border-color:var(--reagent);color:var(--reagent)}
+.btn-ghost{background:transparent;color:var(--ink);border-color:var(--rule)}
+.btn-ghost:hover{border-color:var(--ink)}
+.btn:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+/* ── hero / workcell ──────────────────────────────────────────────────── */
+.hero{position:relative;overflow:hidden;border-bottom:1px solid var(--rule);
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/100% 86px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/86px 100%,
+    radial-gradient(70% 50% at 68% 38%,#FAFBFB 0%,rgba(250,251,251,0) 70%),
+    var(--paper)}
+#three{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:block}
+#leads{position:absolute;inset:0;z-index:3;pointer-events:none;width:100%;height:100%}
+.hero-in{position:relative;z-index:4;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);
+  gap:24px;align-items:start;min-height:calc(100svh - 66px - 110px);
+  padding-block:clamp(30px,4vw,54px) clamp(18px,2.6vw,30px);pointer-events:none}
+@supports not (height:100svh){.hero-in{min-height:calc(100vh - 176px)}}
+.hero-in a,.hero-in button,.hero-in input{pointer-events:auto}
+.hero-l{display:flex;flex-direction:column;gap:clamp(18px,2.4vw,28px);min-width:0}
+.hero-l>*{text-shadow:0 0 22px var(--paper),0 0 10px var(--paper),0 0 4px var(--paper)}
+.hero-l .btn{text-shadow:none}
+.hero-r{display:flex;flex-direction:column;align-items:flex-end;gap:16px;min-width:0;justify-self:end}
+
+/* corner brackets around the headline, from the reference sheets */
+.h-wrap{position:relative;padding:16px 0 0 18px;margin-left:-18px}
+.h-wrap::before,.h-wrap::after{content:"";position:absolute;width:20px;height:20px;border:1px solid var(--ink-3)}
+.h-wrap::before{left:0;top:0;border-right:0;border-bottom:0}
+.h-wrap::after{right:-10px;bottom:-6px;border-left:0;border-top:0}
+h1 .o{color:var(--reagent)}
+.kicker{font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.kicker i{width:7px;height:7px;background:var(--ink);display:block;flex:none}
+.hero-cta{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+/* big delivered counter — the one thing a non-reader can follow */
+.counter{display:flex;flex-direction:column;gap:6px;background:rgba(255,255,255,.9);border:1.5px solid var(--ink);
+  padding:15px 19px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);min-width:214px}
+.counter-k{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--ink);
+  display:flex;justify-content:space-between;gap:12px}
+.counter-v{font-family:var(--mono);font-weight:600;font-size:clamp(27px,3.1vw,38px);line-height:1;
+  font-variant-numeric:tabular-nums;letter-spacing:-.03em;color:var(--ink)}
+.counter-v s{text-decoration:none;color:var(--ink-2);font-size:.5em;letter-spacing:0}
+.counter-bar{height:4px;background:rgba(10,14,16,.14);margin-top:10px;overflow:hidden}
+.counter-bar i{display:block;height:100%;width:0;background:var(--ink)}
+
+/* phase list — the reference's right-hand menu, doing real work */
+.phases{display:flex;flex-direction:column;gap:3px;align-items:flex-end;font-family:var(--mono);
+  font-size:12px;letter-spacing:.11em;text-transform:uppercase}
+.phases div{color:var(--ink-2);opacity:.62;font-weight:500;display:flex;align-items:center;gap:8px;transition:opacity .3s ease,color .3s ease}
+.phases div::before{content:"▸";opacity:0;color:var(--ink);transition:opacity .3s ease}
+.phases div.on{color:var(--ink);opacity:1;font-weight:700}
+.phases div.on::before{opacity:1}
+.phases div.on span{border-bottom:2px solid var(--ink)}
+.phases div.done{opacity:.9;color:var(--ink-2)}
+
+/* tracked labels with leader lines, like the reference pills */
+.lab{position:absolute;z-index:4;pointer-events:none;font-family:var(--mono);font-size:10.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;background:#fff;border:1.5px solid var(--ink);color:var(--ink);
+  padding:6px 13px;border-radius:999px;display:flex;align-items:center;gap:9px;white-space:nowrap;
+  transform:translate(-50%,-50%);opacity:0;transition:opacity .45s ease}
+.lab.on{opacity:1}
+.lab b{font-weight:700;font-variant-numeric:tabular-nums}
+.lab em{font-style:normal;color:var(--ink-2)}
+
+/* bottom instrument strip */
+.hero-foot{position:relative;z-index:4;display:flex;justify-content:space-between;align-items:flex-end;
+  gap:24px;flex-wrap:wrap;padding-bottom:clamp(20px,3vw,32px);pointer-events:none}
+.jp{display:flex;flex-direction:column;gap:5px}
+.jp b{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--ink)}
+.jp span{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+.prog{display:flex;flex-direction:column;gap:8px;min-width:230px}
+.prog-row{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--ink)}
+.prog-track{flex:1;height:2px;background:rgba(10,14,16,.2);position:relative}
+.prog-track i{position:absolute;top:-3px;width:8px;height:8px;background:var(--ink);left:0}
+.prog-ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;font-weight:500;color:var(--ink-2)}
+.loading{position:absolute;inset:0;z-index:5;display:grid;place-content:center;gap:12px;justify-items:center;
+  background:var(--paper);font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);transition:opacity .55s ease}
+.loadbar{width:150px;height:2px;background:var(--rule-2);overflow:hidden}
+.loadbar i{display:block;height:100%;width:0;background:var(--ink);transition:width .25s ease}
+
+/* ── spec rail ────────────────────────────────────────────────────────── */
+.statband{border-bottom:1px solid var(--rule);background:var(--paper);position:relative;z-index:1}
+.specs{display:flex;flex-wrap:wrap;gap:1px;background:var(--rule)}
+/* flex-grow on a wrapped row means the last line stretches: never an empty cell */
+.spec{background:var(--paper);padding:26px 22px 24px;display:flex;flex-direction:column;gap:9px;
+  flex:1 1 184px;min-width:0;position:relative}
+.spec .ic{color:var(--reagent)}
+.spec b{font-family:var(--display),var(--sans);font-size:clamp(24px,2.4vw,35px);font-weight:800;
+  letter-spacing:-.05em;font-variant-numeric:tabular-nums;color:var(--ink);line-height:1;margin-top:2px}
+.spec b i{font-style:normal;font-size:.4em;font-weight:700;letter-spacing:-.01em;color:var(--ink-2);margin-left:3px}
+.spec span{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-2)}
+
+/* ── one diagram language: 24px monoline, accent coloured, on every card ── */
+.ic{width:34px;height:34px;display:block;flex:none}
+.four .ic{color:var(--reagent);margin-bottom:6px}
+.night .ic{color:var(--mint)}
+
+/* ── generic ──────────────────────────────────────────────────────────── */
+.head{display:flex;flex-direction:column;gap:17px;margin-bottom:clamp(30px,3.6vw,48px);max-width:64ch}
+.four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.four>div{background:var(--card);padding:30px 24px 28px;display:flex;flex-direction:column;gap:10px;min-width:0;
+  position:relative;transition:background .25s ease}
+.four>div::before{content:"";position:absolute;left:0;top:0;height:3px;width:0;background:var(--c);
+  transition:width .85s cubic-bezier(.22,1,.36,1)}
+.four>div.in::before,.no-js .four>div::before{width:100%}
+.four>div{--c:var(--reagent)}
+.night .four>div{--c:var(--mint)}
+.four>div:nth-child(1)::before{transition-delay:.05s}.four>div:nth-child(2)::before{transition-delay:.16s}
+.four>div:nth-child(3)::before{transition-delay:.27s}.four>div:nth-child(4)::before{transition-delay:.38s}
+.four>div:hover{background:color-mix(in srgb,var(--c) 7%,var(--card))}
+.four p{font-size:14px;line-height:1.56}
+.n{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;color:var(--c,var(--ink-3));font-weight:600}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(20px,3.2vw,52px);align-items:start}
+.kv{display:flex;flex-direction:column;border-top:1px solid var(--rule)}
+.kv div{display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid var(--rule-2);font-size:14px;min-width:0}
+.kv span:first-child{color:var(--ink-2)}
+.kv span:last-child{font-family:var(--mono);font-size:13px;text-align:right;font-variant-numeric:tabular-nums}
+.chart-card{border:1px solid var(--rule);padding:clamp(17px,2vw,25px);min-width:0;display:flex;flex-direction:column;gap:20px;background:var(--panel)}
+.chart-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap}
+.chart-head b{font-family:var(--mono);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.18em}
+.legend{display:flex;gap:14px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);flex-wrap:wrap}
+.legend i{display:inline-block;width:15px;height:0;border-top:2px solid currentColor;vertical-align:middle;margin-right:6px}
+svg{display:block;max-width:100%}
+.res{display:flex;gap:4px;align-items:flex-end;height:62px}
+.res i{flex:1;min-width:0;height:100%;background:#fff;border:1px solid var(--rule);position:relative;overflow:hidden}
+.res i::after{content:"";position:absolute;left:0;right:0;bottom:0;height:0;background:var(--reagent);transition:height 1.1s cubic-bezier(.4,0,.2,1)}
+.res i.fill::after{height:62%}
+.res-labels{display:flex;gap:4px;font-family:var(--mono);font-size:9.5px;font-weight:600;color:var(--ink-2);margin-top:7px}
+.res-labels{justify-content:space-between;padding-inline:1.5%}
+.res-labels span{flex:1;text-align:center;min-width:0}
+.night .res-labels span{color:rgba(240,238,232,.6)}
+.night .res-labels span.on{color:var(--mint)}
+.res-labels span.on{color:var(--ink);font-weight:600}
+
+/* ── connect ──────────────────────────────────────────────────────────── */
+.connect{border:1px solid var(--rule);padding:clamp(20px,2.6vw,34px);background:var(--panel);
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(20px,3vw,42px);align-items:center}
+.codebox{display:flex;gap:10px;flex-wrap:wrap}
+input[type=text]{font-family:var(--mono);font-size:15px;letter-spacing:.14em;text-transform:uppercase;padding:11px 15px;
+  border:1px solid var(--rule);background:#fff;color:var(--ink);width:170px;max-width:100%;border-radius:0}
+.tele{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.tele div{background:#fff;padding:12px 13px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.tele span{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2)}
+.tele b{font-family:var(--mono);font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
+.statepill{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border:1.5px solid var(--ink);
+  padding:6px 12px;display:inline-flex;align-items:center;gap:8px;color:var(--ink);align-self:flex-start;background:#fff}
+.dot{width:7px;height:7px;background:var(--ink-3);flex:none}
+.dot.live{background:var(--jade);box-shadow:0 0 0 3px rgba(47,111,98,.22)}
+.hint{font-size:12.5px;color:var(--ink-2);line-height:1.5}
+
+footer{border-top:1px solid var(--rule)}
+footer .wrap{padding-block:30px 44px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-end}
+footer .mono{font-size:11px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase}
+
+
+/* ══ colour bands ═══════════════════════════════════════════════════════ */
+.band.night{background:var(--night);color:#F0EEE8;border-top:0;--card:#161F21}
+.night h2,.night h3,.night .mark{color:#fff}
+.night p,.night .lede{color:rgba(240,238,232,.8)}
+.night .eyebrow{color:rgba(240,238,232,.66)}
+.night .eyebrow::after{background:rgba(255,255,255,.17)}
+.night .kv{border-top-color:rgba(255,255,255,.2)}
+.night .kv div{border-bottom-color:rgba(255,255,255,.1)}
+.night .kv span:first-child{color:rgba(240,238,232,.8)}
+.night .kv span:last-child{color:var(--mint)}
+.night .chart-card{background:rgba(255,255,255,.035);border-color:rgba(255,255,255,.14)}
+.night .chart-head b{color:#fff}
+.night .hint{color:rgba(240,238,232,.62)}
+.night .legend{color:rgba(240,238,232,.5)}
+.js-anim .night .band>.wrap>.head::after,.js-anim .night .head::after{background:rgba(255,255,255,.55)}
+
+/* ══ marquee ════════════════════════════════════════════════════════════ */
+.ticker{background:var(--reagent);color:#fff;overflow:hidden;padding-block:14px;position:relative;z-index:1}
+.ticker ul{display:flex;gap:52px;margin:0;padding:0;list-style:none;width:max-content;
+  font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;
+  animation:tick 34s linear infinite}
+.ticker li{display:flex;align-items:center;gap:52px;white-space:nowrap}
+.ticker li::after{content:"";width:5px;height:5px;background:var(--mint);flex:none}
+@keyframes tick{to{transform:translateX(-50%)}}
+
+/* ══ laminar flow band ══════════════════════════════════════════════════ */
+.flow{background:var(--night);overflow:hidden;position:relative;z-index:1}
+.flow-in{position:relative}
+.flow svg{width:100%;height:clamp(170px,21vw,260px);display:block}
+.flow + .band.night > .wrap{padding-top:clamp(34px,4.4vw,64px)}
+.fl use{stroke-dasharray:150 30;animation-name:drift;animation-timing-function:linear;animation-iteration-count:infinite}
+@keyframes drift{to{stroke-dashoffset:-180}}
+.flow-in::after{content:"";position:absolute;inset:auto 0 0 0;height:74%;pointer-events:none;
+  background:linear-gradient(to top,var(--night) 10%,rgba(15,22,24,.62) 52%,transparent)}
+.flow-cap{z-index:2;position:absolute;left:0;right:0;bottom:clamp(14px,2.4vw,26px);display:flex;flex-direction:column;gap:5px;
+  align-items:center;text-align:center;padding-inline:20px;pointer-events:none}
+.flow-cap b{font-family:var(--display),var(--sans);font-size:clamp(24px,4vw,52px);font-weight:800;letter-spacing:-.06em;color:#fff;line-height:1}
+.flow-cap span{font-family:var(--mono);font-weight:600;font-size:clamp(9.5px,1vw,11.5px);letter-spacing:.2em;
+  text-transform:uppercase;color:rgba(240,238,232,.56)}
+
+/* ══ the looping pour figure ════════════════════════════════════════════ */
+.pourfig{width:100%}
+.pourfig svg{width:100%;height:auto}
+.vial-rot,.liq-rot{transform-box:view-box;transform-origin:93px 160px;
+  animation:7.2s cubic-bezier(.45,.02,.3,1) infinite}
+.vial-rot{animation-name:tip}
+.liq-rot{animation-name:untip}
+.liq{transform-box:view-box;animation:drain 7.2s cubic-bezier(.45,.02,.3,1) infinite}
+.jet{animation:jet 7.2s linear infinite;stroke-dasharray:9 7}
+.jet-g{animation:jetfade 7.2s steps(1,end) infinite}
+.ch-fill{transform-box:view-box;transform-origin:139px 272px;animation:fillup 7.2s cubic-bezier(.45,.02,.3,1) infinite}
+.drop{transform-box:view-box;animation:drop 1.05s linear infinite}
+.drop:nth-of-type(2){animation-delay:-.35s}.drop:nth-of-type(3){animation-delay:-.7s}
+@keyframes tip   {0%,9%{transform:rotate(0)}   24%,70%{transform:rotate(62deg)}  86%,100%{transform:rotate(0)}}
+@keyframes untip {0%,9%{transform:rotate(0)}   24%,70%{transform:rotate(-62deg)} 86%,100%{transform:rotate(0)}}
+@keyframes drain {0%,24%{transform:translateY(0)} 68%,93%{transform:translateY(42px)} 100%{transform:translateY(0)}}
+@keyframes fillup{0%,26%{transform:scaleY(0)}    68%,93%{transform:scaleY(1)}        100%{transform:scaleY(0)}}
+@keyframes jet   {to{stroke-dashoffset:-64}}
+@keyframes jetfade{0%,25%{opacity:0} 27%,66%{opacity:1} 68%,100%{opacity:0}}
+@keyframes drop  {from{transform:translateY(0);opacity:0} 15%{opacity:1} to{transform:translateY(74px);opacity:0}}
+
+footer{border-top:0;background:var(--night);color:#F0EEE8}
+footer .mark{color:#fff}
+footer .mono{color:rgba(240,238,232,.62)}
+
+/* ── responsive ───────────────────────────────────────────────────────── */
+@media (max-width:1040px){.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){
+  .kicker{font-size:10px;letter-spacing:.1em;flex-wrap:nowrap}
+  #three{top:0;bottom:auto;height:clamp(290px,52vw,380px)}
+  #leads{display:none}
+  .hero-in{grid-template-columns:minmax(0,1fr);min-height:0;
+    padding-top:clamp(302px,54vw,396px);padding-bottom:18px}
+  .hero-r{align-items:flex-start;justify-self:start}
+  .phases{align-items:flex-start}
+  .lab{display:none}
+  .connect,.two{grid-template-columns:minmax(0,1fr)}
+  .top nav{display:none}
+}
+@media (max-width:760px){.flow-cap b{font-size:clamp(22px,7vw,40px)}.ticker ul{gap:34px}.ticker li{gap:34px}}
+@media (max-width:560px){
+  .four{grid-template-columns:minmax(0,1fr)}
+  .tele{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hero-foot .prog{min-width:0;width:100%}
+}
+/* ── opening: canvas fades up alone, type follows in order. Gated on js-anim so
+      nothing is hidden unless the script that reveals it is running. ── */
+.js-anim #three{opacity:0;transition:opacity 1.6s ease}
+.js-anim .hero.ready #three{opacity:1}
+.js-anim .hero .hero-l>*,.js-anim .hero .hero-r>*,.js-anim .hero .hero-foot>*{opacity:0;transform:translateY(16px)}
+.js-anim .hero.ready .hero-l>*,.js-anim .hero.ready .hero-r>*,.js-anim .hero.ready .hero-foot>*{opacity:1;transform:none;
+  transition:opacity 1s cubic-bezier(.22,1,.36,1),transform 1s cubic-bezier(.22,1,.36,1)}
+.js-anim .hero.ready .hero-l>:nth-child(1){transition-delay:1.3s}
+.js-anim .hero.ready .hero-l>:nth-child(2){transition-delay:1.5s}
+.js-anim .hero.ready .hero-l>:nth-child(3){transition-delay:1.8s}
+.js-anim .hero.ready .hero-l>:nth-child(4){transition-delay:2.0s}
+.js-anim .hero.ready .hero-r>:nth-child(1){transition-delay:2.3s}
+.js-anim .hero.ready .hero-r>:nth-child(2){transition-delay:2.5s}
+.js-anim .hero.ready .hero-foot>*{transition-delay:2.8s}
+.js-anim .hero.ready .lab{transition-delay:2.6s}
+@media (prefers-reduced-motion:reduce){
+  .js-anim #three,.js-anim .hero .hero-l>*,.js-anim .hero .hero-r>*,.js-anim .hero .hero-foot>*{opacity:1;transform:none;transition:none}
+}
+
+/* ── scroll motion. Content is visible by default; the hidden-start state only
+      applies once JS has confirmed it can reveal again, so nothing can strand. ── */
+#scrollbar{position:fixed;left:0;top:0;height:2px;width:0;z-index:40;
+  background:linear-gradient(90deg,var(--reagent),var(--jade) 55%,var(--mint))}
+.js-anim .rv{opacity:0;transform:translateY(18px);transition:opacity .7s cubic-bezier(.22,1,.36,1),transform .7s cubic-bezier(.22,1,.36,1)}
+.js-anim .rv.in{opacity:1;transform:none}
+.js-anim .rv-d1{transition-delay:.07s}.js-anim .rv-d2{transition-delay:.14s}
+.js-anim .rv-d3{transition-delay:.21s}.js-anim .rv-d4{transition-delay:.28s}
+.js-anim .band>.wrap>.head::after{content:"";display:block;height:1px;background:var(--ink);
+  width:0;transition:width 1s cubic-bezier(.22,1,.36,1) .2s;margin-top:4px}
+.js-anim .band>.wrap>.head.in::after{width:100%}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}*{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  .js-anim .rv{opacity:1;transform:none}
+  .js-anim .band>.wrap>.head::after{width:100%}
+}
+
+/* ── console band ─────────────────────────────────────────────────────── */
+.cstats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:rgba(240,238,232,.14);border:1px solid rgba(240,238,232,.14);margin-bottom:22px}
+.cstats div{background:var(--night);padding:16px 18px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.cstats span{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(240,238,232,.6)}
+.cstats b{font-family:var(--display),var(--sans);font-size:clamp(18px,1.9vw,26px);font-weight:700;letter-spacing:-.05em;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cstats b.ok{color:var(--mint)}
+.lcams{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.lcams figure{margin:0;background:#fff;min-width:0}
+.lcams{align-items:start}
+.lcams figure.wide{grid-column:1/-1}
+.lcams:has(figure.wide) figure{grid-column:1/-1}
+.lcams img{display:block;width:100%;height:auto;max-height:340px;object-fit:contain;background:var(--night)}
+.lcam-empty{display:block;width:100%;aspect-ratio:16/9;background:var(--night)}
+.lcam-empty{display:grid;place-items:center;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(240,238,232,.6)}
+.lcams figcaption{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2)}
+.lcams figcaption b{font-variant-numeric:tabular-nums;color:var(--ink)}
+.ctiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:rgba(240,238,232,.14);border:1px solid rgba(240,238,232,.14)}
+.ct{background:#121B1D;padding:22px 20px 24px;display:flex;flex-direction:column;gap:10px;color:inherit;text-decoration:none;min-width:0;
+  transition:background .2s ease}
+.ct:hover{background:#18252a}
+.ct:hover h3{color:var(--mint)}
+.ct.big{grid-column:span 2;grid-row:span 2;background:linear-gradient(160deg,rgba(111,203,184,.14),rgba(111,203,184,.02) 60%),#121B1D}
+.ct.big h3{font-family:var(--display),var(--sans);font-size:clamp(20px,2vw,28px);letter-spacing:-.05em;line-height:1.15}
+.ct.wide{grid-column:span 2}
+.ct-k{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--mint)}
+.ct h3{color:#fff;transition:color .2s ease}
+.ct p{color:rgba(240,238,232,.72);font-size:14px;line-height:1.55}
+.ct-tags{margin-top:auto;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:rgba(240,238,232,.55)}
+.btn-mint{background:var(--mint);color:var(--night);border-color:var(--mint)}
+.btn-mint:hover{background:#8fdccb;border-color:#8fdccb}
+@media (max-width:980px){.ctiles{grid-template-columns:repeat(2,minmax(0,1fr))}.cstats{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:560px){.ctiles{grid-template-columns:1fr}.ct.big,.ct.wide{grid-column:auto;grid-row:auto}.cstats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+
+<!-- ══ top bar ═══════════════════════════════════════════════════════════ -->
+<div id="scrollbar" aria-hidden="true"></div>
+<section class="top"><div class="wrap">
+  <div class="mark">
+    <svg viewBox="0 0 26 14" aria-hidden="true">
+      <path d="M1 3.4c6.2-2.8 12.2 2.8 18.4 0 2.3-1 4-1.6 5.8-2" fill="none" stroke="#0B0C0D" stroke-width="1.4" stroke-linecap="round"/>
+      <path d="M1 7c6.2-2.8 12.2 2.8 18.4 0 2.3-1 4-1.6 5.8-2" fill="none" stroke="#0B0C0D" stroke-width="1.4" stroke-linecap="round" opacity=".5"/>
+      <path d="M1 10.6c6.2-2.8 12.2 2.8 18.4 0 2.3-1 4-1.6 5.8-2" fill="none" stroke="#0B0C0D" stroke-width="1.4" stroke-linecap="round" opacity=".24"/>
+    </svg>
+    Laminar
+  </div>
+  <nav>
+    <a href="#console">Console</a><a href="#method">Method</a><a href="#pour">The pour</a><a href="#hardware">Hardware</a><a href="#connect">Connect</a>
+  </nav>
+  <a class="btn btn-primary" href="/console.html">Open the console ↗</a>
+</div></section>
+
+<!-- ══ hero: the workcell runs behind everything ═════════════════════════ -->
+<section class="hero" id="hero">
+  <canvas id="three"></canvas>
+  <svg id="leads" aria-hidden="true"><path id="lead1" fill="none" stroke="#0A0E10" stroke-width="1.4" opacity="0"/><path id="lead2" fill="none" stroke="#0A0E10" stroke-width="1.4" opacity="0"/></svg>
+
+  <div class="lab" id="lab1"><em>▸</em><span>Vial</span> <b id="lab1v">15 mL</b></div>
+  <div class="lab" id="lab2"><em>▸</em><span>Channel 04</span> <b id="lab2v">0.00 mL</b></div>
+
+  <div class="wrap">
+    <div class="hero-in">
+      <div class="hero-l">
+        <div class="kicker"><i></i>Autonomous liquid handling · Cal Hacks 13.0</div>
+        <div class="h-wrap">
+          <h1>&plusmn;0.2 mL.<br><span class="o">EVERY TIME.</span></h1>
+        </div>
+        <p class="lede">A seven-axis arm that keeps tilting until the camera says the channel holds exactly what the protocol asked for.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="/console.html">Open the console ↗</a>
+          <button class="btn btn-ghost" id="cta-connect">Connect a bench</button>
+        </div>
+      </div>
+
+      <div class="hero-r">
+        <div class="counter">
+          <div class="counter-k"><span>Delivered</span><span id="c-phase">Idle</span></div>
+          <div class="counter-v"><span id="c-val">0.00</span><s> / 2.00 mL</s></div>
+          <div class="counter-bar"><i id="c-bar"></i></div>
+        </div>
+        <div class="statepill" id="hero-live" hidden><span class="dot live"></span><span>Live</span></div>
+        <div class="phases" id="phases">
+          <div data-p="ACQUIRE"><span>Acquire</span></div>
+          <div data-p="TRANSPORT"><span>Transport</span></div>
+          <div data-p="ALIGN"><span>Align</span></div>
+          <div data-p="POUR"><span>Pour</span></div>
+          <div data-p="RETURN"><span>Return</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-foot">
+      <div class="jp"><b>Aliquoting</b><span>Autonomous · twelve channels</span></div>
+      <div class="prog">
+        <div class="prog-row"><span id="p-i">01</span><span class="prog-track"><i id="p-dot"></i></span><span>05</span></div>
+        <div class="prog-ticks"><span>ACQ</span><span>TRN</span><span>ALN</span><span>POUR</span><span>RTN</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading" id="loading"><div>Loading workcell</div><div class="loadbar"><i id="loadbar"></i></div></div>
+</section>
+
+<!-- ══ spec rail ═════════════════════════════════════════════════════════ -->
+<section class="statband"><div class="specs">
+  <div class="spec"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8.5h19M2.5 15.5h19"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><path d="M12 2.5v3M12 18.5v3"/></svg><b>±0.2<i>mL</i></b><span>Tolerance</span></div>
+  <div class="spec"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6v12M7 6v12M14 6v12M17.5 6v12M21 6v12"/><rect x="9.2" y="9.5" width="3.6" height="8.5" fill="currentColor" stroke="none"/><path d="M10.4 6v2"/></svg><b>12</b><span>Channels</span></div>
+  <div class="spec"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3.6a8.4 8.4 0 0 1 7.6 4.9M12 20.4a8.4 8.4 0 0 1-7.6-4.9"/><path d="M19.9 4.6v4h-4M4.1 19.4v-4h4"/></svg><b>5<i>Hz</i></b><span>Vision loop</span></div>
+  <div class="spec"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 21h6"/><path d="M5.6 21v-6.4l6.4-5 5 2.8"/><circle cx="5.6" cy="14.6" r="1.8"/><circle cx="12" cy="9.6" r="1.8"/><circle cx="17" cy="12.4" r="1.8"/></svg><b>7</b><span>Driven axes</span></div>
+  <div class="spec"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.6 2.8h6.8"/><path d="M9.8 2.8v11.4l2.2 5.8 2.2-5.8V2.8"/><path d="M9.8 8h4.4M9.8 11.2h4.4"/></svg><b>15<i>mL</i></b><span>Conical, 17 mm</span></div>
+</div></section>
+
+<!-- ══ marquee ═══════════════════════════════════════════════════════════ -->
+<section class="ticker" aria-hidden="true"><ul><li>±0.2 mL tolerance</li><li>Twelve channels</li><li>5 Hz vision loop</li><li>Seven driven axes</li><li>Closed on volume, not angle</li><li>15 mL conical</li><li>Fin-ray fingers</li><li>Move the station mid-run</li><li>±0.2 mL tolerance</li><li>Twelve channels</li><li>5 Hz vision loop</li><li>Seven driven axes</li><li>Closed on volume, not angle</li><li>15 mL conical</li><li>Fin-ray fingers</li><li>Move the station mid-run</li></ul></section>
+
+<!-- ══ method ════════════════════════════════════════════════════════════ -->
+
+<!-- ══ console: where the lab runs it ═════════════════════════════════════ -->
+<section class="band night" id="console"><div class="wrap">
+  <div class="head"><div class="eyebrow">The console</div>
+    <h2>Where the lab runs it.</h2>
+    <p class="lede">Ask for a run in plain words or out loud. Claude plans it, code checks it, a named person approves it, and the arm above pours it. Every step lands in the console, live.</p></div>
+  <div class="cstats" id="cstats" aria-live="polite">
+    <div><span>Bench</span><b id="cs-bench">—</b></div>
+    <div><span>Pours logged</span><b id="cs-pours">—</b></div>
+    <div><span>Runs finished</span><b id="cs-runs">—</b></div>
+    <div><span>Plans refused</span><b id="cs-refused">—</b></div>
+    <div><span>Last run</span><b id="cs-last">—</b></div>
+  </div>
+  <div class="ctiles">
+    <a href="/console.html?tab=run" class="ct big"><span class="ct-k">01 · Run</span><h3>Say it. Hear it back. Approve it.</h3>
+      <p>Hold the mic and ask. The checked plan is read back, you approve by name or by voice, and the 3D arm follows every move. “Stop” wins at any moment.</p>
+      <span class="ct-tags">Claude · Cartesia voice · Convex workflow</span></a>
+    <a href="/console.html?tab=builder" class="ct"><span class="ct-k">02 · Protocol builder</span><h3>Plate maps with four liquids</h3>
+      <p>Red sample, blue, yellow and green reagents. Import a CSV, see each channel fill, check it live against the bench.</p></a>
+    <a href="/console.html?tab=qc" class="ct"><span class="ct-k">03 · Run log &amp; QC</span><h3>Every pour, graded</h3>
+      <p>Error per pour against the tolerance band, per tube, with aborts and refusals.</p></a>
+    <a href="/console.html?tab=data" class="ct"><span class="ct-k">04 · Tiger Data</span><h3>Every joint, 100 times a second</h3>
+      <p>Commanded against measured for each real run, per-joint smoothness, and a replay on the 3D arm.</p></a>
+    <a href="/console.html?tab=reports" class="ct"><span class="ct-k">05 · Reports</span><h3>08:00 QC report</h3>
+      <p>Frozen each morning from the last 24 hours, with one recommendation.</p></a>
+    <a href="/console.html?tab=audit" class="ct wide"><span class="ct-k">06 · Audit</span><h3>Who did what</h3>
+      <p>Append-only and searchable: every request, check, approval and stop.</p></a>
+    <a href="/console.html?tab=game" class="ct wide"><span class="ct-k">07 · Beat the robot</span><h3>Pour it by hand</h3>
+      <p>Hold to tilt and try to hit the target. Then compare with the arm.</p></a>
+  </div>
+  <div class="hero-cta" style="margin-top:28px">
+    <a class="btn btn-mint" href="/console.html">Open the console ↗</a>
+    <span class="mono" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(240,238,232,.6)">Plans from the Mana Lab Console arrive here too</span>
+  </div>
+</div></section>
+
+<section class="band" id="method"><div class="wrap">
+  <div class="head">
+    <div class="eyebrow">Method</div>
+    <h2>Four moves. One of them is hard.</h2>
+    <p class="lede">Lifting and carrying a vial is solved. Knowing when to stop pouring is not. So everything up to the pour runs on fixed, measured poses, and the camera only has to do the one job that needs it.</p>
+  </div>
+  <div class="four">
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 4.4c3 3.2 3 12 0 15.2M19.4 4.4c-3 3.2-3 12 0 15.2"/><rect x="8.8" y="7" width="6.4" height="10" rx="3.2"/></svg><div class="n">01 / ACQUIRE</div><h3>The finger bends, not the tube</h3>
+      <p>Fin-ray fingers close to an 11&nbsp;mm gap. Press a tube into the flat face and the whole finger curls around it, so a stalled motor flexes plastic instead of crushing a 0.9&nbsp;mm wall.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.6h8"/><path d="M8.8 3.6v8.6a3.2 3.2 0 0 0 6.4 0V3.6"/><path d="M8.8 8.4h6.4"/><path d="M3.4 19.4h16.2M16.6 17 20 19.4 16.6 21.8"/></svg><div class="n">02 / TRANSPORT</div><h3>The wrist never moves</h3>
+      <p>Six joints carry the vial across the bench with the wrist roll locked at zero. The meniscus never breaks, so the volume measured at the rack is the volume that arrives.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 5.2 9.4 9.2 2.6 13.2z"/><rect x="12" y="3.6" width="9.4" height="9.4" rx="1.2"/><rect x="14.6" y="6.2" width="4.2" height="4.2" fill="currentColor" stroke="none"/><path d="M3 19.6h18"/></svg><div class="n">03 / ALIGN</div><h3>Look first, then commit</h3>
+      <p>A camera on the gripper, pitched 38° out over the fingertips, picks up the marker on the station and corrects the approach before the arm descends. Move the station mid-demo; it still finds it.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 9.6 9.6 5.8l4.6 7.9-6.4 3.7z"/><path d="M15.6 12.4v2.1M15.6 16.6v1.6"/><path d="M11 21.2h9.8v-3.2H11z"/></svg><div class="n">04 / POUR</div><h3>One joint, closed loop</h3>
+      <p>Only the wrist rolls. A second camera reads the rising column in the channel and feeds volume back five times a second, so the tilt stops on a measured volume, not a stopwatch.</p></div>
+  </div>
+</div></section>
+
+<!-- ══ laminar flow band ═════════════════════════════════════════════════ -->
+<section class="flow" aria-hidden="true"><div class="flow-in">
+<svg viewBox="0 0 1200 150" preserveAspectRatio="none">
+<defs><linearGradient id="fg" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#0F4C5C"/><stop offset=".36" stop-color="#2F6F62"/><stop offset=".7" stop-color="#6FCBB8"/><stop offset="1" stop-color="#14525F"/></linearGradient><path id="sl" d="M-560 -0.87 C-534 -0.87 -534 -0.97 -508 -0.97 C-481 -0.97 -481 -0.50 -455 -0.50 C-429 -0.50 -429 0.26 -402 0.26 C-376 0.26 -376 0.87 -350 0.87 C-324 0.87 -324 0.97 -298 0.97 C-271 0.97 -271 0.50 -245 0.50 C-219 0.50 -219 -0.26 -192 -0.26 C-166 -0.26 -166 -0.87 -140 -0.87 C-114 -0.87 -114 -0.97 -88 -0.97 C-61 -0.97 -61 -0.50 -35 -0.50 C-9 -0.50 -9 0.26 18 0.26 C44 0.26 44 0.87 70 0.87 C96 0.87 96 0.97 122 0.97 C149 0.97 149 0.50 175 0.50 C201 0.50 201 -0.26 228 -0.26 C254 -0.26 254 -0.87 280 -0.87 C306 -0.87 306 -0.97 332 -0.97 C359 -0.97 359 -0.50 385 -0.50 C411 -0.50 411 0.26 438 0.26 C464 0.26 464 0.87 490 0.87 C516 0.87 516 0.97 542 0.97 C569 0.97 569 0.50 595 0.50 C621 0.50 621 -0.26 648 -0.26 C674 -0.26 674 -0.87 700 -0.87 C726 -0.87 726 -0.97 752 -0.97 C779 -0.97 779 -0.50 805 -0.50 C831 -0.50 831 0.26 858 0.26 C884 0.26 884 0.87 910 0.87 C936 0.87 936 0.97 962 0.97 C989 0.97 989 0.50 1015 0.50 C1041 0.50 1041 -0.26 1068 -0.26 C1094 -0.26 1094 -0.87 1120 -0.87 C1146 -0.87 1146 -0.97 1172 -0.97 C1199 -0.97 1199 -0.50 1225 -0.50 C1251 -0.50 1251 0.26 1278 0.26 C1304 0.26 1304 0.87 1330 0.87 C1356 0.87 1356 0.97 1382 0.97 C1409 0.97 1409 0.50 1435 0.50 C1461 0.50 1461 -0.26 1488 -0.26 C1514 -0.26 1514 -0.87 1540 -0.87 C1566 -0.87 1566 -0.97 1592 -0.97 C1619 -0.97 1619 -0.50 1645 -0.50 C1671 -0.50 1671 0.26 1698 0.26 C1724 0.26 1724 0.87 1750 0.87" fill="none" stroke="url(#fg)" stroke-linecap="round"/></defs>
+<g class="fl"><g transform="translate(0 8.0) scale(1 4.50)"><use href="#sl" stroke-width="0.189" opacity="0.18" style="animation-delay:0.00s;animation-duration:3.00s"/></g><g transform="translate(-409 15.4) scale(1 5.63)"><use href="#sl" stroke-width="0.183" opacity="0.28" style="animation-delay:-0.20s;animation-duration:3.28s"/></g><g transform="translate(-398 22.9) scale(1 6.72)"><use href="#sl" stroke-width="0.180" opacity="0.39" style="animation-delay:-0.40s;animation-duration:3.56s"/></g><g transform="translate(-387 30.3) scale(1 7.75)"><use href="#sl" stroke-width="0.177" opacity="0.48" style="animation-delay:-0.60s;animation-duration:3.84s"/></g><g transform="translate(-376 37.8) scale(1 8.68)"><use href="#sl" stroke-width="0.176" opacity="0.57" style="animation-delay:-0.80s;animation-duration:4.12s"/></g><g transform="translate(-365 45.2) scale(1 9.48)"><use href="#sl" stroke-width="0.175" opacity="0.64" style="animation-delay:-1.00s;animation-duration:3.00s"/></g><g transform="translate(-354 52.7) scale(1 10.13)"><use href="#sl" stroke-width="0.174" opacity="0.70" style="animation-delay:-1.20s;animation-duration:3.28s"/></g><g transform="translate(-343 60.1) scale(1 10.61)"><use href="#sl" stroke-width="0.173" opacity="0.74" style="animation-delay:-1.40s;animation-duration:3.56s"/></g><g transform="translate(-332 67.6) scale(1 10.90)"><use href="#sl" stroke-width="0.173" opacity="0.77" style="animation-delay:-1.60s;animation-duration:3.84s"/></g><g transform="translate(-321 75.0) scale(1 11.00)"><use href="#sl" stroke-width="0.173" opacity="0.78" style="animation-delay:-1.80s;animation-duration:4.12s"/></g><g transform="translate(-310 82.4) scale(1 10.90)"><use href="#sl" stroke-width="0.173" opacity="0.77" style="animation-delay:-2.00s;animation-duration:3.00s"/></g><g transform="translate(-299 89.9) scale(1 10.61)"><use href="#sl" stroke-width="0.173" opacity="0.74" style="animation-delay:-2.20s;animation-duration:3.28s"/></g><g transform="translate(-288 97.3) scale(1 10.13)"><use href="#sl" stroke-width="0.174" opacity="0.70" style="animation-delay:-2.40s;animation-duration:3.56s"/></g><g transform="translate(-277 104.8) scale(1 9.48)"><use href="#sl" stroke-width="0.175" opacity="0.64" style="animation-delay:-2.60s;animation-duration:3.84s"/></g><g transform="translate(-266 112.2) scale(1 8.68)"><use href="#sl" stroke-width="0.176" opacity="0.57" style="animation-delay:-2.80s;animation-duration:4.12s"/></g><g transform="translate(-255 119.7) scale(1 7.75)"><use href="#sl" stroke-width="0.177" opacity="0.48" style="animation-delay:-3.00s;animation-duration:3.00s"/></g><g transform="translate(-244 127.1) scale(1 6.72)"><use href="#sl" stroke-width="0.180" opacity="0.39" style="animation-delay:-3.20s;animation-duration:3.28s"/></g><g transform="translate(-233 134.6) scale(1 5.63)"><use href="#sl" stroke-width="0.183" opacity="0.28" style="animation-delay:-3.40s;animation-duration:3.56s"/></g><g transform="translate(-222 142.0) scale(1 4.50)"><use href="#sl" stroke-width="0.189" opacity="0.18" style="animation-delay:-3.60s;animation-duration:3.84s"/></g></g></svg>
+<div class="flow-cap"><b>Laminar</b><span>No turbulence. No splash. No lost volume.</span></div>
+</div></section>
+
+<!-- ══ the pour ══════════════════════════════════════════════════════════ -->
+<section class="band night" id="pour"><div class="wrap">
+  <div class="head">
+    <div class="eyebrow">The adaptive pour</div>
+    <h2>A tilt angle gets you a pour. It doesn't get you a volume.</h2>
+  </div>
+  <div class="two">
+    <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
+      <p class="lede">Tip the same vial twice, to the same angle, for the same two seconds, and you get two different volumes. Surface tension, how full the tube started, how cleanly the lip broke: all of it moves the number.</p>
+      <p class="lede">So the angle is not the setpoint. The volume is. The wrist rolls in, the station camera measures the column climbing in the channel, and the controller trims the tilt until the delivered volume reaches target, then rolls back out and holds.</p>
+      <div class="kv">
+        <div><span>Controlled joint</span><span>J6 wrist roll</span></div>
+        <div><span>Feedback signal</span><span>column height → mL</span></div>
+        <div><span>Loop rate</span><span>5 Hz</span></div>
+        <div><span>Lead-out</span><span>0.35 mL anticipation</span></div>
+        <div><span>Every other joint</span><span>fixed, from YAML</span></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div>
+        <div class="chart-head" style="margin-bottom:12px"><b>Reservoir · 12 channels</b><span class="mono" style="font-size:11px;color:#6FCBB8">2.00 mL into 04</span></div>
+<div class="pourfig">
+<svg viewBox="0 0 440 300" role="img" aria-label="A vial tips over channel four of a twelve channel reservoir, pours, and the channel fills.">
+  <defs>
+    <linearGradient id="lq" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8FE0CE"/><stop offset="1" stop-color="#1E6B63"/></linearGradient>
+    <linearGradient id="lq2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6FCBB8"/><stop offset="1" stop-color="#17514E"/></linearGradient>
+    <clipPath id="vclip"><path d="M78 120 L78 194 L88 208 L98 208 L108 194 L108 120 Z"/></clipPath>
+  </defs>
+
+  <rect x="28" y="272" width="372" height="16" rx="2" fill="rgba(255,255,255,.14)"/>
+  <rect x="52" y="288" width="60" height="10" fill="rgba(255,255,255,.09)"/>
+  <rect x="36" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="66" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="96" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="126" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="#6FCBB8" stroke-width="1"/><rect x="156" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="186" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="216" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="246" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="276" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="306" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="336" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/><rect x="366" y="222" width="26" height="50" rx="1.5" fill="rgba(255,255,255,.055)" stroke="rgba(255,255,255,.2)" stroke-width="1"/>
+  <rect class="ch-fill" x="126" y="232" width="26" height="40" fill="url(#lq2)"/>
+
+  <g class="jet-g">
+    <path class="jet" d="M139 154 C139 180 141 198 139 220" stroke="url(#lq)" stroke-width="4.4" fill="none" stroke-linecap="round"/>
+    <circle class="drop" cx="139" cy="160" r="2.2" fill="#8FE0CE"/>
+    <circle class="drop" cx="140" cy="160" r="1.7" fill="#8FE0CE"/>
+    <circle class="drop" cx="138" cy="160" r="1.4" fill="#8FE0CE"/>
+  </g>
+
+  <g class="vial-rot">
+    <g clip-path="url(#vclip)"><g class="liq-rot">
+      <rect class="liq" x="-220" y="140" width="880" height="420" fill="url(#lq)" opacity=".92"/>
+    </g></g>
+    <path d="M78 120 L78 194 L88 208 L98 208 L108 194 L108 120" fill="rgba(255,255,255,.05)"
+          stroke="rgba(255,255,255,.58)" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M75 119 H111" stroke="rgba(255,255,255,.82)" stroke-width="3" stroke-linecap="round"/>
+    <g stroke="rgba(255,255,255,.34)" stroke-width="1.4" stroke-linecap="round">
+      <path d="M78 141 H87"/><path d="M78 157 H87"/><path d="M78 173 H87"/></g>
+  </g>
+</svg></div>
+        <div class="res-labels" id="res-labels"></div>
+      </div>
+      <div>
+        <div class="chart-head"><b>Delivered volume</b>
+          <div class="legend"><span style="color:#6FCBB8"><i></i>Closed loop</span><span style="color:rgba(240,238,232,.5)"><i style="border-top-style:dashed"></i>Fixed angle</span></div>
+        </div>
+        <svg viewBox="0 0 440 226" role="img" aria-label="Delivered volume against time. The closed loop settles on 2.00 millilitres; the same wrist motion at a fixed angle overshoots to 2.61 millilitres.">
+          <g stroke="rgba(255,255,255,.22)" stroke-width="1"><line x1="44" y1="10" x2="44" y2="190"/><line x1="44" y1="190" x2="428" y2="190"/></g>
+          <g stroke="rgba(255,255,255,.075)" stroke-width="1"><line x1="44" y1="145" x2="428" y2="145"/><line x1="44" y1="100" x2="428" y2="100"/><line x1="44" y1="55" x2="428" y2="55"/></g>
+          <rect x="44" y="91" width="384" height="18" fill="rgba(111,203,184,.15)"/>
+          <line x1="44" y1="100" x2="428" y2="100" stroke="#6FCBB8" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>
+          <path d="M44 190 L96 188 L140 179 L184 156 L228 123 L272 90 L316 67 L360 55 L404 51 L428 50" fill="none" stroke="#7E8A8D" stroke-width="2" stroke-dasharray="5 4" stroke-linecap="round"/>
+          <path d="M44 190 L96 188 L140 178 L184 154 L228 125 L262 108 L292 100.5 L330 100 L380 100 L428 100" fill="none" stroke="#6FCBB8" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="428" cy="100" r="4.2" fill="#6FCBB8"/><circle cx="428" cy="50" r="4" fill="#7E8A8D"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="10" fill="rgba(240,238,232,.45)">
+            <text x="36" y="194" text-anchor="end">0.0</text><text x="36" y="149" text-anchor="end">1.0</text>
+            <text x="36" y="104" text-anchor="end">2.0</text><text x="36" y="59" text-anchor="end">3.0</text>
+            <text x="11" y="106" text-anchor="middle" transform="rotate(-90 11 106)">mL</text>
+            <text x="44" y="210">0 s</text><text x="236" y="210" text-anchor="middle">2.5 s</text><text x="428" y="210" text-anchor="end">5 s</text>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="10">
+            <text x="422" y="39" text-anchor="end" fill="rgba(240,238,232,.55)">2.61 mL</text>
+            <text x="422" y="124" text-anchor="end" fill="#6FCBB8">2.00 mL</text>
+          </g>
+        </svg>
+        <p class="hint" style="margin-top:10px">Shaded band is the ±0.2 mL the protocol allows. The dashed trace is the identical wrist motion with the camera ignored.</p>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ══ hardware ══════════════════════════════════════════════════════════ -->
+<section class="band" id="hardware"><div class="wrap">
+  <div class="head"><div class="eyebrow">Hardware</div>
+    <h2>Stock arm. Everything that touches glass, we printed.</h2></div>
+  <div class="four">
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 21h6"/><path d="M5.6 21v-6.4l6.4-5 5 2.8"/><circle cx="5.6" cy="14.6" r="1.8"/><circle cx="12" cy="9.6" r="1.8"/><circle cx="17" cy="12.4" r="1.8"/></svg><div class="n">ARM</div><h3>reBot B601-RS</h3>
+      <p>Seven RobStride joints on a 1&nbsp;Mbps CAN bus, driven straight from a laptop through a USB-CAN adapter. No vendor stack anywhere in the loop.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.8v16.4l12.2-6.4z"/><path d="M6 8.4 14.6 12.2M6 12.6l6.6 2.9M6 16.6l3.6 1.6"/></svg><div class="n">GRIP</div><h3>Fin-ray fingers</h3>
+      <p>Hollow triangles with five fanned ribs. The contact wall bows inward under load and the tip swings in with it, so the finger closes around the tube rather than onto it.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8.2" width="11" height="8.2" rx="1.4"/><circle cx="8.5" cy="12.3" r="2.3"/><path d="M15 9.6 21 6.2M15 15 21 18.4"/></svg><div class="n">EYES</div><h3>38° gripper mount</h3>
+      <p>One printed piece that slides onto the gripper block and stops against the frame. Holds the camera out over the fingertips, where the vial lip sits 5° above frame centre.</p></div>
+    <div><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.6h18.8v8H2.6z"/><path d="M6.4 8.6v8M10.1 8.6v8M13.9 8.6v8M17.6 8.6v8"/><path d="M9 20.4h6v-3.8"/></svg><div class="n">BENCH</div><h3>One-piece station</h3>
+      <p>Reservoir and measuring camera share a single tray, so moving the station never changes the calibration. Hand it to a judge and let them put it anywhere.</p></div>
+  </div>
+</div></section>
+
+<!-- ══ connect ═══════════════════════════════════════════════════════════ -->
+<section class="band" id="connect"><div class="wrap">
+  <div class="head"><div class="eyebrow">Live link</div>
+    <h2>Watch a bench that isn't yours.</h2>
+    <p class="lede">The laptop at the bench publishes joint angles, gripper state and pour progress continuously. Open this page anywhere, enter the bench code, and the arm above stops replaying and starts mirroring the real one.</p></div>
+  <div class="connect">
+    <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+      <div class="eyebrow" style="color:var(--ink-2)">Bench code</div>
+      <div class="codebox">
+        <input type="text" id="code" placeholder="LAB-0000" maxlength="8" value="LAB-4417" aria-label="Bench code">
+        <button class="btn btn-primary" id="btn-connect">Connect</button>
+        <button class="btn btn-ghost" id="btn-disconnect" hidden>Disconnect</button>
+      </div>
+      <p class="hint" id="connect-hint">Bench <b class="mono">LAB-4417</b> is our Cal Hacks bench. While a run is going, the arm above switches from its replay loop to that bench's live joints by itself; Connect keeps it on the stream.</p>
+      <p class="hint"><a href="/console.html" style="color:var(--reagent)">Open the console</a> to ask for a run, approve it by voice and watch it here.</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+      <div class="tele">
+        <div><span>J1 base</span><b id="t-j1">—</b></div>
+        <div><span>J2 shoulder</span><b id="t-j2">—</b></div>
+        <div><span>J3 elbow</span><b id="t-j3">—</b></div>
+        <div><span>J6 wrist</span><b id="t-j6">—</b></div>
+        <div><span>Gripper</span><b id="t-grip">—</b></div>
+        <div><span>Delivered</span><b id="t-vol">—</b></div>
+      </div>
+      <div class="statepill"><span class="dot" id="conn-dot"></span><span id="conn-state">Not connected</span></div>
+      <div class="lcams">
+        <figure><img id="cam-side" alt="Side camera on the tray" hidden><div class="lcam-empty" id="cam-side-empty">Side camera · no frames yet</div><figcaption><span>Side · tray <i id="cam-side-size" style="font-style:normal;opacity:.6"></i></span><b id="cam-side-age">—</b></figcaption></figure>
+        <figure><img id="cam-wrist" alt="Wrist camera on the arm" hidden><div class="lcam-empty" id="cam-wrist-empty">Wrist camera · no frames yet</div><figcaption><span>Wrist · on the arm <i id="cam-wrist-size" style="font-style:normal;opacity:.6"></i></span><b id="cam-wrist-age">—</b></figcaption></figure>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div style="display:flex;flex-direction:column;gap:7px">
+    <div class="mark" style="font-size:17px">Laminar</div>
+    <div class="mono">Hema · Avery · Amogh · Om</div>
+  </div>
+  <div class="mono">Cal Hacks 13.0 · Seeed reBot B601-RS · 36 hours</div>
+</div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAMINAR — landing page
+
+   The workcell animation is deliberately independent of scroll. Keyframes set
+   targets; a critically damped spring drives the joints toward them, so the
+   motion is continuous and C1-smooth with no stutter at waypoints and nothing
+   to stall when the page scrolls.
+
+   Everything that drives the arm and the readouts comes through one
+   interface: source.onFrame(cb) → cb({ j, grip, volume, target, phase, held }).
+   ReplaySource is the built-in loop. ConvexSource is the real stream: it is fed
+   by Convex live queries (src/landing-live.ts subscribes to site.liveArm and
+   site.liveStats over the Convex client). The hero switches to the stream by
+   itself while a run is going, and back to the replay after it ends.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const el = id => document.getElementById(id);
+
+/* ── 1. the cycle ──────────────────────────────────────────────────────── */
+const CYCLE = [
+  { t:0.0,  q:[  0,-18, 42, 0, 28,   0], g:62, phase:'ACQUIRE'   },
+  { t:1.7,  q:[-34,  4, 37, 0, 44,   0], g:62, phase:'ACQUIRE'   },
+  { t:2.9,  q:[-34, 16, 31, 0, 47,   0], g:62, phase:'ACQUIRE'   },
+  { t:3.8,  q:[-34, 16, 31, 0, 47,   0], g:14, phase:'ACQUIRE'   },
+  { t:5.0,  q:[-34, -6, 45, 0, 38,   0], g:14, phase:'TRANSPORT' },
+  { t:6.9,  q:[ 24, -6, 45, 0, 38,   0], g:14, phase:'TRANSPORT' },
+  { t:8.2,  q:[ 24,  6, 39, 0, 43,   0], g:14, phase:'ALIGN'     },
+  { t:9.4,  q:[ 24, 10, 36, 0, 44,   0], g:14, phase:'ALIGN'     },
+  { t:12.4, q:[ 24, 10, 36, 0, 44, -78], g:14, phase:'POUR'      },
+  { t:13.9, q:[ 24, 10, 36, 0, 44, -78], g:14, phase:'POUR'      },
+  { t:15.2, q:[ 24, 10, 36, 0, 44,   0], g:14, phase:'POUR'      },
+  { t:17.2, q:[-34, 16, 31, 0, 47,   0], g:14, phase:'RETURN'    },
+  { t:18.3, q:[-34, 16, 31, 0, 47,   0], g:62, phase:'RETURN'    },
+  { t:19.8, q:[  0,-18, 42, 0, 28,   0], g:62, phase:'RETURN'    },
+];
+const CYCLE_T = CYCLE[CYCLE.length-1].t;
+const T_GRASP = 3.8, T_RELEASE = 18.3;
+const POUR_DEG = 62;                 /* a pour, not a dump */
+const T_FLOW0 = 11.6, T_FLOW1 = 13.9; /* liquid runs once the lip has cleared, through the hold */
+const PHASES = ['ACQUIRE','TRANSPORT','ALIGN','POUR','RETURN'];
+
+/* linear targets; the spring below does the easing, which keeps it C1-smooth */
+function sampleCycle(t){
+  t = ((t % CYCLE_T) + CYCLE_T) % CYCLE_T;
+  let i = 0; while(i < CYCLE.length-1 && CYCLE[i+1].t <= t) i++;
+  const a = CYCLE[i], b = CYCLE[Math.min(i+1, CYCLE.length-1)];
+  const u = Math.min(Math.max((t - a.t)/Math.max(b.t - a.t, 1e-6), 0), 1);
+  const q = a.q.map((v,k) => v + (b.q[k]-v)*u);
+  /* volume tracks elapsed flow time, the way liquid actually behaves, not tilt angle */
+  const vol = t < T_FLOW0 ? 0
+            : 2 * Math.min((t - T_FLOW0) / (T_FLOW1 - T_FLOW0), 1) * (t <= T_RELEASE ? 1 : 0);
+  return { j:q, grip:a.g + (b.g-a.g)*u, target:2, volume:vol, phase:a.phase, t,
+           held: t >= T_GRASP && t < T_RELEASE };
+}
+
+class ReplaySource {
+  constructor(){ this.cbs = []; this.t = 0; this.last = performance.now(); }
+  onFrame(cb){ this.cbs.push(cb); }
+  start(){ this.raf = requestAnimationFrame(this._tick.bind(this)); }
+  stop(){ cancelAnimationFrame(this.raf); }
+  _tick(now){
+    const dt = Math.min((now - this.last)/1000, 0.08);   /* clamp so a stalled tab never jumps */
+    this.last = now;
+    this.t = RM ? 12.6 : this.t + dt;
+    const f = sampleCycle(this.t);
+    this.cbs.forEach(cb => cb(f, dt));
+    this.raf = requestAnimationFrame(this._tick.bind(this));
+  }
+}
+
+/* ── 2. scene ──────────────────────────────────────────────────────────── */
+const heroEl = el('hero'), canvasEl = el('three'), loadingEl = el('loading'), loadbarEl = el('loadbar');
+let robot = null, camera = null, renderer = null, scene = null;
+let gripNode = null, gripLeft = null, gripRight = null;
+let vial = null, vialLiquid = null, stream = null, chanFill = null, rackAnchor = null, benchGroup = null;
+let chanBase = 0, chanMax = 0.026, tipAxis = new THREE.Vector3(1,0,0);
+let chanXZ = new THREE.Vector3();
+
+const MAT = {
+  shell: new THREE.MeshStandardMaterial({ color:0x262C30, metalness:0.38, roughness:0.4 }),
+  dark:  new THREE.MeshStandardMaterial({ color:0x0E1113, metalness:0.46, roughness:0.36 }),
+  lime:  new THREE.MeshStandardMaterial({ color:0x7F8A90, metalness:0.2, roughness:0.44 }),  /* Seeed ship these lime; on this page the reagent is the only colour */
+};
+const LINK_MAT = { base_link:'dark', link1:'shell', link2:'shell', link3:'shell',
+  link4:'shell', link5:'dark', link6:'shell', gripper_end:'dark', gripper_left:'lime', gripper_right:'lime' };
+
+async function loadRobot(base){
+  const spec = await (await fetch(base + 'robot.json')).json();
+  const loader = new THREE.GLTFLoader();
+  const links = {}, joints = {};
+  for(const n of Object.keys(spec.links)) links[n] = new THREE.Group();
+  for(const j of spec.joints){
+    if(!links[j.child])  links[j.child]  = new THREE.Group();
+    if(!links[j.parent]) links[j.parent] = new THREE.Group();
+  }
+  for(const j of spec.joints){
+    const frame = new THREE.Group();
+    frame.position.set(j.xyz[0], j.xyz[1], j.xyz[2]);
+    frame.rotation.set(j.rpy[0], j.rpy[1], j.rpy[2], 'ZYX');
+    const moving = new THREE.Group();
+    frame.add(moving); moving.add(links[j.child]); links[j.parent].add(frame);
+    joints[j.name] = { group:moving, axis:j.axis ? new THREE.Vector3(...j.axis) : null, type:j.type, limit:j.limit };
+  }
+  const root = new THREE.Group();
+  root.add(links['base_link']);
+  root.rotation.x = -Math.PI/2;
+
+  const names = Object.keys(spec.links); let done = 0;
+  await Promise.all(names.map(name => new Promise(res => {
+    loader.load(base + spec.links[name].glb, gltf => {
+      const m = MAT[LINK_MAT[name] || 'shell'];
+      gltf.scene.traverse(o => { if(o.isMesh){
+        o.material = m;
+        o.geometry.computeVertexNormals();   /* decimation drops normals; without these the arm shades black */
+        o.castShadow = o.receiveShadow = true;
+      }});
+      links[name].add(gltf.scene);
+      loadbarEl.style.width = (++done / names.length * 100) + '%';
+      res();
+    }, undefined, () => { loadbarEl.style.width = (++done / names.length * 100) + '%'; res(); });
+  })));
+
+  function setJoint(name, value){
+    const j = joints[name]; if(!j || !j.axis) return;
+    if(j.limit) value = Math.min(j.limit[1], Math.max(j.limit[0], value));
+    if(j.type === 'prismatic') j.group.position.copy(j.axis).multiplyScalar(value);
+    else j.group.quaternion.setFromAxisAngle(j.axis, value);
+  }
+  function setFromTelemetry(deg6, gripPct){
+    for(let i=0;i<6;i++) setJoint('joint'+(i+1), THREE.MathUtils.degToRad(deg6[i]||0));
+    if(gripPct != null){
+      const m = Math.max(0, Math.min(0.05, gripPct/100*0.05));
+      setJoint('joint_left', m); setJoint('joint_right', m);
+    }
+  }
+  return { root, setJoint, setFromTelemetry, joints, links };
+}
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3();
+function gripPoint(){
+  if(gripLeft && gripRight){
+    gripLeft.getWorldPosition(_a); gripRight.getWorldPosition(_b);
+    return _a.clone().add(_b).multiplyScalar(0.5);
+  }
+  gripNode.getWorldPosition(_a); return _a.clone();
+}
+function fkPoint(q){ robot.setFromTelemetry(q, 14); robot.root.updateMatrixWorld(true); return gripPoint(); }
+
+/* Find joints that actually put the fingertips at a given reach and height,
+   inside a tidy shoulder-out posture. Coarse grid then refine, once, at load. */
+function solveReach(j1, targetR, targetY){
+  let best = null;
+  const test = (j2,j3,j5) => {
+    const p = fkPoint([j1,j2,j3,0,j5,0]);
+    const e = Math.abs(Math.hypot(p.x,p.z) - targetR) + Math.abs(p.y - targetY)*1.5
+            + Math.abs(j3 - 46)*0.0012 + Math.abs(j2 - 10)*0.0012;
+    if(!best || e < best.e) best = { e, q:[j1,j2,j3,0,j5,0] };
+  };
+  for(let j2=-4;j2<=52;j2+=3) for(let j3=16;j3<=74;j3+=3) for(let j5=10;j5<=76;j5+=5) test(j2,j3,j5);
+  const b = best.q.slice();
+  for(let j2=b[1]-3;j2<=b[1]+3;j2+=1) for(let j3=b[2]-3;j3<=b[2]+3;j3+=1) for(let j5=b[4]-5;j5<=b[4]+5;j5+=2) test(j2,j3,j5);
+  return best.q.map(v => Math.round(v*10)/10);
+}
+
+function buildBench(graspPt, pourPt){
+  const g = new THREE.Group(); scene.add(g); benchGroup = g;
+  const steel = new THREE.MeshStandardMaterial({ color:0xAEB6BC, metalness:0.55, roughness:0.35 });
+  const tray  = new THREE.MeshStandardMaterial({ color:0x2B3236, metalness:0.2, roughness:0.62 });
+  const glass = new THREE.MeshStandardMaterial({ color:0xFBFDFE, metalness:0.02, roughness:0.06,
+    transparent:true, opacity:0.68, depthWrite:false, side:THREE.DoubleSide });
+  const rib   = new THREE.MeshStandardMaterial({ color:0x2B3236, metalness:0.2, roughness:0.55 });  /* dividers: dark, so the twelve channels read as drawn lines */
+  const deck  = new THREE.MeshStandardMaterial({ color:0xE3E8EA, metalness:0.05, roughness:0.72 });
+  const dye   = new THREE.MeshStandardMaterial({ color:0x17475C, metalness:0.0, roughness:0.5 });
+
+  tipAxis = new THREE.Vector3(0,1,0).cross(new THREE.Vector3(pourPt.x, 0, pourPt.z).normalize()).normalize();
+
+  const TIP_DROP = 0.089;
+  const rackTop = Math.max(0.02, graspPt.y - TIP_DROP);
+  const rack = new THREE.Mesh(new THREE.BoxGeometry(0.072, rackTop, 0.058), tray);
+  rack.position.set(graspPt.x, rackTop/2, graspPt.z); rack.castShadow = rack.receiveShadow = true; g.add(rack);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.03, 20, 1, true), steel);
+  collar.position.set(graspPt.x, rackTop + 0.013, graspPt.z); collar.castShadow = true; g.add(collar);
+  rackAnchor = new THREE.Vector3(graspPt.x, rackTop + 0.059, graspPt.z);
+
+  /* Where does the lip finish up once the wrist has rolled? Put channel 04 there.
+     Anything else and the stream pours past the reservoir. */
+  const qT = new THREE.Quaternion().setFromAxisAngle(tipAxis, THREE.MathUtils.degToRad(POUR_DEG));
+  const mouth = pourPt.clone()
+    .add(new THREE.Vector3(0, -0.030, 0).applyQuaternion(qT))
+    .add(new THREE.Vector3(0,  0.0725, 0).applyQuaternion(qT));
+
+  const CH = 12, CH4 = 3, pitch = 0.0132, wellH = 0.013;
+  const deckY = Math.max(0.012, mouth.y - 0.050 - wellH);   /* lip clears the rim by 50 mm */
+  const st = new THREE.Group();
+  st.position.set(mouth.x, 0, mouth.z);
+  const side = new THREE.Vector3(0,1,0).cross(new THREE.Vector3(pourPt.x,0,pourPt.z).normalize()).normalize();
+  st.rotation.y = Math.atan2(-side.z, side.x);              /* channels run broadside to the reach */
+  g.add(st);
+  const W = CH*pitch, wellD = 0.052, FIN = 0.0018, RIM = 0.003, FLOOR = 0.003;
+  const xMid = ((CH-1)/2 - CH4)*pitch;
+  const BODY = 0.013;                                   /* the tray's own shell under the channels */
+  const ped = new THREE.Mesh(new THREE.BoxGeometry(W*0.46, deckY - BODY, wellD*0.5), tray);
+  ped.position.set(xMid, (deckY - BODY)/2, 0);
+  ped.castShadow = ped.receiveShadow = true; st.add(ped);
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(W + 0.013, BODY, wellD + 0.012), tray);
+  shell.position.set(xMid, deckY - BODY/2, 0);
+  shell.castShadow = shell.receiveShadow = true; st.add(shell);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(W + 0.006, FLOOR, wellD + 2*RIM), deck);
+  floor.position.set(xMid, deckY + FLOOR/2, 0); floor.receiveShadow = true; st.add(floor);
+  /* 13 dividers + 2 end rails: this is what makes it read as twelve channels at a glance */
+  for(let i=0;i<=CH;i++){
+    const f = new THREE.Mesh(new THREE.BoxGeometry(FIN, wellH, wellD), rib);   /* divider */
+    f.position.set((i - CH4 - 0.5)*pitch, deckY + FLOOR + wellH/2, 0);
+    f.castShadow = f.receiveShadow = true; st.add(f);
+  }
+  for(const sz of [-1, 1]){
+    const r = new THREE.Mesh(new THREE.BoxGeometry(W + 0.006, wellH, RIM), rib);
+    r.position.set(xMid, deckY + FLOOR + wellH/2, sz*(wellD + RIM)/2);
+    r.castShadow = r.receiveShadow = true; st.add(r);
+  }
+  chanFill = new THREE.Mesh(new THREE.BoxGeometry(pitch - FIN - 0.0006, 1, wellD - 0.0012), dye);
+  chanFill.position.set(0, deckY + FLOOR, 0); chanFill.scale.y = 0.0001; st.add(chanFill);
+  chanBase = deckY + FLOOR; chanMax = wellH * 0.8;
+  chanXZ = new THREE.Vector3(mouth.x, 0, mouth.z);          /* world XZ of channel 04 */
+
+  /* 15 mL conical: straight body, conical base, threaded neck, graduations.
+     The cap comes off at the rack and stays there — you cannot pour through a cap. */
+  const capMat = new THREE.MeshStandardMaterial({ color:0x2B3136, metalness:0.1, roughness:0.62 });
+  vial = new THREE.Group(); scene.add(vial);
+  const R = 0.0085;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.080, 28, 1, true), glass);
+  body.position.y = 0.020; vial.add(body);
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(R, 0.027, 28, 1, true), glass);
+  cone.position.y = -0.0335; cone.rotation.x = Math.PI; vial.add(cone);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(R*0.96, R, 0.013, 28, 1, true), glass);
+  neck.position.y = 0.0665; vial.add(neck);
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(R*1.02, 0.0011, 8, 30), capMat);
+  lip.position.y = 0.0725; lip.rotation.x = Math.PI/2; vial.add(lip);
+  for(const gy of [-0.012, 0.006, 0.024, 0.042]){                   /* graduation rings */
+    const gr = new THREE.Mesh(new THREE.TorusGeometry(R*1.005, 0.00035, 6, 26), capMat);
+    gr.position.y = gy; gr.rotation.x = Math.PI/2; vial.add(gr);
+  }
+  /* liquid: fills the cone first, then climbs the straight body */
+  vialLiquid = new THREE.Mesh(new THREE.CylinderGeometry(R*0.88, R*0.88, 1, 22), dye);
+  vial.add(vialLiquid);
+  /* the cap, unscrewed and resting on the rack deck */
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.0106, 0.0106, 0.0135, 26), capMat);
+  cap.position.set(graspPt.x + 0.030, rackTop + 0.0068, graspPt.z - 0.012);
+  cap.castShadow = true; g.add(cap);
+
+  stream = new THREE.Mesh(new THREE.CylinderGeometry(0.0022, 0.0031, 1, 10), dye);
+  stream.visible = false; scene.add(stream);
+}
+
+/* Fit the whole workcell into a chosen window of the frame. Solves for distance and
+   aim by projecting the 8 bounding-box corners and correcting, so nothing ever clips. */
+function frameWorkcell(){
+  /* the box has to hold every pose in the cycle, not just one, or the reach pose clips */
+  const box = new THREE.Box3();
+  for(const k of CYCLE){ robot.setFromTelemetry(k.q, 14); robot.root.updateMatrixWorld(true); box.expandByObject(robot.root); }
+  if(benchGroup) box.expandByObject(benchGroup);
+  const size = box.getSize(new THREE.Vector3());
+  const corners = [];
+  for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z])
+    corners.push(new THREE.Vector3(x, y, z));
+  const wide = innerWidth > 900;
+  /* the window the workcell must live inside, in NDC. On desktop it is pushed right of the headline. */
+  const X0 = wide ? -0.58 : -0.92, X1 = wide ? 0.98 : 0.92;
+  const Y0 = wide ? -0.97 : -0.9, Y1 = wide ? 0.86 : 0.9;
+  const dir = new THREE.Vector3(0.74, 0.60, 0.95).normalize();
+  const target = box.getCenter(new THREE.Vector3());
+  let dist = Math.max(size.x, size.y, size.z) * 2.2;
+  const right = new THREE.Vector3(), up = new THREE.Vector3(), tmp = new THREE.Vector3();
+  for(let it = 0; it < 18; it++){
+    camera.position.copy(target).addScaledVector(dir, dist);
+    camera.lookAt(target); camera.updateMatrixWorld(true); camera.updateProjectionMatrix();
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for(const p of corners){ const v = tmp.copy(p).project(camera);
+      x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y); }
+    /* re-aim first: slide the look-at point so the projected centre meets the window centre */
+    const h = dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    right.setFromMatrixColumn(camera.matrixWorld, 0);
+    up.setFromMatrixColumn(camera.matrixWorld, 1);
+    target.addScaledVector(right, ((x0 + x1) / 2 - (X0 + X1) / 2) * h * camera.aspect)
+          .addScaledVector(up,    ((y0 + y1) / 2 - (Y0 + Y1) / 2) * h);
+    /* then re-range: projected span scales as 1/distance */
+    dist *= Math.max((x1 - x0) / (X1 - X0), (y1 - y0) / (Y1 - Y0));
+  }
+  camBase = { target: target.clone(), dir: dir.clone(), dist: dist };
+  camera.position.copy(target).addScaledVector(dir, dist);
+  camera.lookAt(target); camera.updateProjectionMatrix();
+}
+let camBase = null, camDolly = 1, camDollyV = 0;
+const camTgt = new THREE.Vector3(), camTgtV = new THREE.Vector3();
+const _cdir = new THREE.Vector3(), _up = new THREE.Vector3(0,1,0), _focus = new THREE.Vector3(), _want = new THREE.Vector3();
+/* Per phase: how far in, and how much the look-at leans from the workcell centre
+   toward the thing that matters in that phase. Everything is spring-smoothed, so
+   phase changes read as a camera operator, not a cut. */
+const SHOT = { ACQUIRE:[0.86, 0.45, 'rack'], TRANSPORT:[1.02, 0.0, null], ALIGN:[0.88, 0.4, 'station'],
+               POUR:[0.68, 0.68, 'station'], RETURN:[1.0, 0.0, null] };
+function moveCamera(dt){
+  if(!camBase) return;
+  if(camTgt.lengthSq() === 0) camTgt.copy(camBase.target);
+  const t = performance.now() / 1000;
+  const yaw = Math.sin(t * 0.19) * THREE.MathUtils.degToRad(5);
+  const shot = SHOT[(frame && frame.phase) || 'TRANSPORT'];
+  if(shot[2] === 'rack' && rackAnchor) _focus.copy(rackAnchor).setY(rackAnchor.y - 0.02);
+  else if(shot[2] === 'station') _focus.set(chanXZ.x, chanBase + 0.05, chanXZ.z);
+  else _focus.copy(camBase.target);
+  _want.copy(camBase.target).lerp(_focus, shot[1]);
+  const r = spring(camDolly, camDollyV, shot[0], 1.5, dt); camDolly = r[0]; camDollyV = r[1];
+  for(const ax of ['x','y','z']){ const q = spring(camTgt[ax], camTgtV[ax], _want[ax], 1.5, dt); camTgt[ax] = q[0]; camTgtV[ax] = q[1]; }
+  _cdir.copy(camBase.dir).applyAxisAngle(_up, yaw);
+  camera.position.copy(camTgt).addScaledVector(_cdir, camBase.dist * camDolly);
+  camera.lookAt(camTgt);
+}
+
+async function initScene(){
+  scene = new THREE.Scene();
+  renderer = new THREE.WebGLRenderer({ canvas:canvasEl, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  camera = new THREE.PerspectiveCamera(32, 1, 0.01, 20);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xB8C0C5, 1.15));
+  const key = new THREE.DirectionalLight(0xffffff, 2.6);
+  key.position.set(0.9, 2.0, 1.2); key.castShadow = true;
+  key.shadow.mapSize.set(768,768);
+  key.shadow.camera.near = 0.3; key.shadow.camera.far = 5;
+  key.shadow.camera.left = -0.8; key.shadow.camera.right = 0.8;
+  key.shadow.camera.top = 0.8;   key.shadow.camera.bottom = -0.8;
+  key.shadow.bias = -0.0012; scene.add(key);
+  const fill = new THREE.DirectionalLight(0xDCE6EC, 0.7);
+  fill.position.set(-1.4, 0.8, -0.6); scene.add(fill);
+
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(0.8, 48), new THREE.ShadowMaterial({ opacity:0.16 }));
+  floor.rotation.x = -Math.PI/2; floor.position.y = -0.001; floor.receiveShadow = true; scene.add(floor);
+
+  robot = await loadRobot('/landing/');
+  scene.add(robot.root);
+  gripNode  = robot.links['gripper_end'] || robot.links['link6'];
+  gripLeft  = robot.links['gripper_left'];
+  gripRight = robot.links['gripper_right'];
+
+  const pickQ = solveReach(-36, 0.300, 0.185);   /* rack: tube stands on a low plinth   */
+  const pourQ = solveReach( 30, 0.395, 0.130);   /* station: further out and lower, so the
+                                                    block clears the base and stays short */
+  const lift  = q => { const c = q.slice(); c[1] -= 22; c[2] += 8; c[4] -= 8; return c; };
+  CYCLE[1].q = lift(pickQ); CYCLE[2].q = pickQ; CYCLE[3].q = pickQ; CYCLE[4].q = lift(pickQ);
+  CYCLE[5].q = lift(pourQ); CYCLE[6].q = lift(pourQ); CYCLE[7].q = pourQ.slice();
+  CYCLE[8].q = pourQ.slice();  CYCLE[8].q[5]  = POUR_DEG;
+  CYCLE[9].q = pourQ.slice();  CYCLE[9].q[5]  = POUR_DEG;
+  CYCLE[10].q = pourQ.slice();
+  CYCLE[11].q = pickQ; CYCLE[12].q = pickQ;
+  buildBench(fkPoint(pickQ).clone(), fkPoint(pourQ).clone());
+  frameWorkcell();
+
+  loadingEl.style.opacity = '0';
+  heroEl.classList.add('ready');
+  setTimeout(() => { loadingEl.hidden = true; el('lab1').classList.add('on'); el('lab2').classList.add('on'); }, 560);
+  resize();
+  renderer.setAnimationLoop(render);
+}
+
+function resize(){
+  if(!renderer) return;
+  const w = canvasEl.clientWidth || heroEl.clientWidth, h = canvasEl.clientHeight || heroEl.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+  frameWorkcell();
+  const svg = el('leads'); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+}
+addEventListener('resize', resize);
+
+/* ── 3. critically damped joints — this is what keeps the motion smooth ── */
+const cur = [0,0,0,0,0,0], vel = [0,0,0,0,0,0];
+let curGrip = 62, velGrip = 0, curVol = 0, velVol = 0;
+/* Semi-implicit integration of a critically damped spring is stable only while
+   omega*h < 2*sqrt(2)-2 = 0.83. A slow or backgrounded tab easily hands us a dt
+   past that, so the step is subdivided rather than clamped — same motion, no
+   blow-up. Below 0.45 the step is also well away from the ringing edge. */
+function spring(c, v, target, omega, dt){
+  if(!(dt > 0) || !isFinite(dt)) return [c, v];
+  const total = Math.min(dt, 0.25);
+  const n = Math.min(16, Math.max(1, Math.ceil(total * omega / 0.45)));
+  const h = total / n;
+  for(let k = 0; k < n; k++){
+    v += (omega*omega*(target - c) - 2*omega*v) * h;
+    c += v * h;
+  }
+  return isFinite(c) ? [c, v] : [target, 0];
+}
+
+/* ── 4. props ──────────────────────────────────────────────────────────── */
+const _lip = new THREE.Vector3();
+let frame = null;
+function placeProps(){
+  if(!vial || !frame) return;
+  if(frame.held){
+    vial.quaternion.setFromAxisAngle(tipAxis, THREE.MathUtils.degToRad(cur[5]));
+    vial.position.copy(gripPoint()).add(new THREE.Vector3(0,-0.030,0).applyQuaternion(vial.quaternion));
+  } else {
+    vial.quaternion.identity();
+    vial.position.copy(rackAnchor);
+  }
+  const poured = curVol / 2;
+  const h = 0.056 * (1 - poured*0.82);
+  vialLiquid.scale.y = Math.max(h, 0.004);
+  vialLiquid.position.y = -0.040 + vialLiquid.scale.y/2;
+  chanFill.scale.y = Math.max(0.0001, poured * chanMax);
+  chanFill.position.y = chanBase + chanFill.scale.y/2;
+
+  const flowing = frame.t > T_FLOW0 - 0.1 && frame.t < T_FLOW1 + 0.15 && Math.abs(cur[5]) > 38;
+  stream.visible = flowing;
+  if(flowing){
+    _lip.set(0, 0.0725, 0).applyQuaternion(vial.quaternion).add(vial.position);
+    const topY = _lip.y, botY = chanBase + chanFill.scale.y;
+    stream.scale.y = Math.max(0.008, topY - botY);
+    stream.position.set(_lip.x, (topY + botY)/2, _lip.z);
+    stream.quaternion.identity();
+  }
+}
+
+/* ── 5. the tracked labels and their leader lines ──────────────────────── */
+const _v = new THREE.Vector3();
+function project(p){
+  _v.copy(p).project(camera);
+  return { x:(_v.x*.5+.5)*canvasEl.clientWidth, y:(-_v.y*.5+.5)*canvasEl.clientHeight + canvasEl.offsetTop };
+}
+function placeLabel(labEl, leadEl, worldPt, dx, dy){
+  const s = project(worldPt);
+  const lx = s.x + dx, ly = s.y + dy;
+  const r = labEl.getBoundingClientRect();
+  const W = heroEl.clientWidth, H = heroEl.clientHeight;
+  const cx = Math.min(Math.max(lx, r.width/2 + 14), W - r.width/2 - 14);
+  const cy = Math.min(Math.max(ly, r.height/2 + 14), H - r.height/2 - 14);
+  labEl.style.left = cx + 'px'; labEl.style.top = cy + 'px';
+  const lx2 = cx, ly2 = cy;
+  const edgeX = lx2 + (s.x > lx2 ? r.width/2 : -r.width/2);
+  leadEl.setAttribute('d', 'M' + edgeX + ' ' + ly2 + ' L' + (s.x + (s.x > lx2 ? -10 : 10)) + ' ' + ly2 + ' L' + s.x + ' ' + s.y);
+  leadEl.setAttribute('opacity', '0.8');
+}
+
+let _lastRender = 0;
+function render(){
+  const now = performance.now(); const dt = Math.min(0.1, (now - _lastRender) / 1000) || 0.016; _lastRender = now;
+  moveCamera(dt);
+  placeProps();
+  renderer.render(scene, camera);
+  if(!vial) return;
+  placeLabel(el('lab1'), el('lead1'), vial.position, -192, -104);
+  placeLabel(el('lab2'), el('lead2'), chanFill.position, 172, 86);
+  deCollide(el('lab1'), el('lead1'), el('lab2'), el('lead2'));
+}
+/* if the vial is right over the channel the two tags land on each other: push the lower one down */
+function deCollide(aEl, aLead, bEl, bLead){
+  const a = aEl.getBoundingClientRect(), b = bEl.getBoundingClientRect();
+  const gapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  const gapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  if(gapY <= -6 || gapX <= -6) return;
+  const lower = a.top > b.top ? bEl : aEl, lowLead = a.top > b.top ? bLead : aLead;
+  const push = gapY + 14;
+  lower.style.top = (parseFloat(lower.style.top) + (lower === aEl ? -push : push)) + 'px';
+  lowLead.setAttribute('opacity', '0.45');
+}
+
+/* ── 6. readouts ───────────────────────────────────────────────────────── */
+const fmt = (n, d) => (n>=0 ? '+' : '') + n.toFixed(d === undefined ? 1 : d);
+let lastPhase = '';
+const phaseEls = Array.prototype.slice.call(document.querySelectorAll('.phases div'));
+function applyFrame(f, dt){
+  frame = f;
+  /* springs: targets come from the cycle, the spring makes the motion continuous */
+  for(let i=0;i<6;i++){ const r = spring(cur[i], vel[i], f.j[i], 11, dt); cur[i] = r[0]; vel[i] = r[1]; }
+  const rg = spring(curGrip, velGrip, f.grip, 14, dt); curGrip = Math.max(0, Math.min(100, rg[0])); velGrip = rg[1];
+  const rv = spring(curVol, velVol, f.volume, 9, dt);  curVol  = Math.max(0, Math.min(2.4, rv[0])); velVol = rv[1];
+  if(robot) robot.setFromTelemetry(cur, curGrip);
+
+  el('c-val').textContent = curVol.toFixed(2);
+  const pct = Math.max(0, Math.min(100, curVol/2*100));
+  el('c-bar').style.width = pct + '%';
+  el('lab2v').textContent = curVol.toFixed(2) + ' mL';
+  el('t-j1').textContent = fmt(cur[0]) + '°';
+  el('t-j2').textContent = fmt(cur[1]) + '°';
+  el('t-j3').textContent = fmt(cur[2]) + '°';
+  el('t-j6').textContent = fmt(cur[5]) + '°';
+  el('t-grip').textContent = Math.round(curGrip) + ' %';
+  el('t-vol').textContent = curVol.toFixed(2) + ' mL';
+
+  if(f.phase !== lastPhase){
+    lastPhase = f.phase;
+    const idx = PHASES.indexOf(f.phase);
+    phaseEls.forEach((d,i) => { d.classList.toggle('on', i === idx); d.classList.toggle('done', i < idx); });
+    el('c-phase').textContent = f.phase.charAt(0) + f.phase.slice(1).toLowerCase();
+    el('p-i').textContent = String(idx+1).padStart(2,'0');
+  }
+  el('p-dot').style.left = (f.t / CYCLE_T * 100) + '%';
+}
+
+const source = new ReplaySource();
+source.onFrame(applyFrame);
+source.start();
+
+/* ── 7. channel numbers under the pour figure ──────────────────────────── */
+(function channelLabels(){
+  const lab = el('res-labels'); if(!lab) return;
+  for(let i=1;i<=12;i++){
+    const sp = document.createElement('span');
+    sp.textContent = String(i).padStart(2,'0');
+    if(i === 4) sp.className = 'on';
+    lab.appendChild(sp);
+  }
+})();
+
+/* ── 8. connect ────────────────────────────────────────────────────────── */
+function setConnected(on, label){
+  el('conn-dot').className = 'dot' + (on ? ' live' : '');
+  el('conn-state').textContent = on ? ('Streaming from ' + label) : 'Not connected';
+  el('btn-connect').hidden = on;
+  el('btn-disconnect').hidden = !on;
+  el('c-phase').textContent = on ? ('Live · ' + label) : 'Replay';
+}
+/* ── live stream ────────────────────────────────────────────────────────────
+   ConvexSource turns Convex live-query results into the same frames ReplaySource
+   makes. src/landing-live.ts subscribes and calls window.laminarLive.arm(...) on
+   every change; this file never polls. */
+const BENCHES = { 'LAB-4417': true };   /* the bench that publishes to this deployment */
+const POUR_MS = 1600;                   /* how long a pour move lasts on the bench */
+/* simulated-bench moves first, then the words the real arm_server reports in "doing" */
+const PHASE_OF = m => !m ? 'RETURN'
+  : /^(grab|lift\(10\))/.test(m) || /grab|grip|pick|acquire/i.test(m) ? 'ACQUIRE'
+  : /^travel_to\(well/.test(m) || /carry|transfer|deliver|travel|move/i.test(m) ? 'TRANSPORT'
+  : /^lower\(6\)/.test(m) || /align|marker|scan|approach|lower/i.test(m) ? 'ALIGN'
+  : /pour|tilt/i.test(m) ? 'POUR' : 'RETURN';
+
+class ConvexSource {
+  constructor(){ this.cbs = []; this.data = null; this.offset = 0; this.last = performance.now(); this.on = false; }
+  onFrame(cb){ this.cbs.push(cb); }
+  push(d, offset){ this.data = d; this.offset = offset; }
+  start(){ this.on = true; this.last = performance.now(); this.raf = requestAnimationFrame(this._tick.bind(this)); }
+  stop(){ this.on = false; cancelAnimationFrame(this.raf); }
+  _tick(now){
+    if(!this.on) return;
+    const dt = Math.min((now - this.last)/1000, 0.08); this.last = now;
+    const d = this.data;
+    if(d && d.samples.length){
+      const t = Date.now() + this.offset - 150, s = d.samples;
+      let q = s[s.length-1].joints, g = s[s.length-1].gripperDeg;
+      if(t < s[0].t){ q = s[0].joints; g = s[0].gripperDeg; }
+      for(let i = s.length-1; i > 0; i--){
+        if(s[i-1].t <= t && t <= s[i].t){
+          const u = (t - s[i-1].t) / Math.max(s[i].t - s[i-1].t, 1);
+          q = s[i].joints.map((v,k) => s[i-1].joints[k] + (v - s[i-1].joints[k]) * u);
+          g = (s[i-1].gripperDeg ?? 0) + ((s[i].gripperDeg ?? 0) - (s[i-1].gripperDeg ?? 0)) * u;
+          break;
+        }
+      }
+      const run = d.run, move = run ? run.move : (s[s.length-1].source === 'bench' ? s[s.length-1].move : null);
+      /* the counter reads the channel being filled: empty while the arm heads to a new channel,
+         counting up through the pour, then holding what landed */
+      let vol = d.pour ? d.pour.pouredMl : 0;
+      if(move && /^(travel_to\(well|lower\(6\))/.test(move)) vol = 0;
+      if(move && move.startsWith('pour') && d.pour){
+        const u = Math.min(Math.max((Date.now() + this.offset - d.pour.t) / POUR_MS, 0), 1);
+        vol = d.pour.pouredMl * u;
+      }
+      const f = { j:q, grip: g ?? 0, target: d.pour ? d.pour.targetMl : 2, volume: run ? vol : 0, phase: PHASE_OF(move),
+                  t: run && run.total ? (run.step / run.total) * CYCLE_T : 0, held: !!run && (g ?? 100) < 40 };
+      this.cbs.forEach(cb => cb(f, dt));
+    }
+    this.raf = requestAnimationFrame(this._tick.bind(this));
+  }
+}
+
+const liveSrc = new ConvexSource();
+liveSrc.onFrame(applyFrame);
+let mode = 'replay';        /* 'replay' | 'auto' (streaming because a run is going) | 'manual' (Connect) */
+let heldOff = false;        /* Disconnect pressed: don't switch to the stream by itself */
+let backToReplay = null;
+let benchCode = 'LAB-4417';
+
+function sourceKind(d){ const s = d && d.samples[d.samples.length-1]; return s && s.source === 'bench' ? 'real arm' : 'simulated bench'; }
+function setTarget(ml){ const tgt = document.querySelector('.counter-v s'); if(tgt) tgt.textContent = ' / ' + ml.toFixed(2) + ' mL'; }
+function paint(){
+  const d = liveSrc.data, liveNow = mode !== 'replay';
+  el('conn-dot').className = 'dot' + (liveNow ? ' live' : '');
+  el('btn-connect').hidden = mode === 'manual'; el('btn-disconnect').hidden = mode !== 'manual';
+  el('conn-state').textContent = !liveNow ? 'Not connected'
+    : !d ? 'Opening stream…'
+    : (d.run || benchFresh()) ? ('Streaming from ' + benchCode + ' · ' + sourceKind(d))
+    : ('Connected to ' + benchCode + ' · ' + sourceKind(d) + ' at rest');
+  const pill = el('hero-live');
+  pill.hidden = !liveNow;
+  const lastS = d && d.samples[d.samples.length-1];
+  pill.lastElementChild.textContent = d && d.run ? ('Live · ' + benchCode + ' · ' + sourceKind(d) + ' · move ' + d.run.step + '/' + d.run.total)
+    : benchFresh() ? ('Live · ' + benchCode + ' · real arm' + (lastS && lastS.move ? ' · ' + lastS.move : ''))
+    : ('Live · ' + benchCode + ' · at rest');
+  if(!liveNow){ el('c-phase').textContent = 'Replay'; setTarget(2); }
+  else if(d && !d.run && !benchFresh()) el('c-phase').textContent = 'Idle';
+  if(liveNow && d && d.pour) setTarget(d.pour.targetMl);
+}
+function goLive(why){
+  if(mode === 'replay'){ source.stop(); liveSrc.start(); }
+  mode = why; paint();
+}
+function goReplay(){
+  if(mode !== 'replay'){ liveSrc.stop(); source.last = performance.now(); source.start(); }
+  mode = 'replay'; paint();
+}
+
+/* the real arm publishes ~10 samples a second; it counts as live while the newest is under 4 s old */
+function benchFresh(){
+  const d = liveSrc.data, s = d && d.samples[d.samples.length-1];
+  return !!s && s.source === 'bench' && (Date.now() + liveSrc.offset - s.t) < 4000;
+}
+/* a live query only speaks when data changes, so this local check notices when the bench goes quiet */
+setInterval(function(){
+  const d = liveSrc.data; if(!d) return;
+  if(benchFresh() && mode === 'replay' && !heldOff){ goLive('auto'); return; }
+  if(mode === 'auto' && !d.run && !benchFresh() && !backToReplay){
+    backToReplay = setTimeout(() => { backToReplay = null; if(mode === 'auto' && !benchFresh() && !(liveSrc.data && liveSrc.data.run)) goReplay(); }, 6000);
+  }
+  if(mode !== 'replay') paint();
+}, 1000);
+
+const camState = { side:{ t:null, seen:[] }, wrist:{ t:null, seen:[] } };
+function paintCams(){
+  ['side','wrist'].forEach(cam => {
+    const a = el('cam-' + cam + '-age'); if(!a) return;
+    const c = camState[cam], age = c.t ? (Date.now() - c.t) / 1000 : null;
+    const r = c.seen.filter(x => Date.now() - x < 3000), fps = r.length > 1 ? (r.length - 1) / ((r[r.length-1] - r[0]) / 1000) : 0;
+    a.textContent = age === null ? 'off' : age < 3 ? ('● live · ' + Math.round(fps) + ' fps') : (age < 120 ? Math.round(age) + ' s ago' : Math.round(age / 60) + ' min ago');
+  });
+}
+setInterval(paintCams, 500);
+
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago'; };
+window.laminarLive = {
+  /* every change to telemetry, runs or pours arrives here, pushed by the live query */
+  arm(d, offset){
+    liveSrc.push(d, offset);
+    if(d.run || benchFresh()){
+      clearTimeout(backToReplay); backToReplay = null;
+      if(mode === 'replay' && !heldOff) goLive('auto');
+    } else if(mode === 'auto' && !backToReplay){
+      backToReplay = setTimeout(() => { backToReplay = null; if(mode === 'auto' && !benchFresh()) goReplay(); }, 10000);
+    }
+    paint();
+  },
+  stats(s){
+    el('cs-bench').textContent = s.running ? 'Running' : 'Idle';
+    el('cs-bench').className = s.running ? 'ok' : '';
+    el('cs-pours').textContent = s.pours;
+    el('cs-runs').textContent = s.runsDone;
+    el('cs-refused').textContent = s.refused;
+    el('cs-last').textContent = s.lastFinishedAt ? ago(s.lastFinishedAt) : '—';
+  },
+  offline(){ el('cs-bench').textContent = 'Offline'; },
+  /* a camera's newest JPEG bytes, pushed by the live query on every frame */
+  frame(cam, f){
+    if(!f) return;
+    const img = el('cam-' + cam), empty = el('cam-' + cam + '-empty'); if(!img) return;
+    const url = URL.createObjectURL(new Blob([f.jpeg], { type:'image/jpeg' }));
+    const old = img.dataset.blob; img.src = url; img.dataset.blob = url; if(old) URL.revokeObjectURL(old);
+    /* take the exact shape of the bench's frames (the side camera sends a wide strip); wide ones get the row */
+    img.onload = () => {
+      const w = img.naturalWidth, h = img.naturalHeight; if(!w || !h) return;
+      img.style.aspectRatio = w + ' / ' + h;
+      img.parentElement.classList.toggle('wide', w / h > 2);
+      const lab = el('cam-' + cam + '-size'); if(lab) lab.textContent = w + '×' + h;
+    };
+    img.hidden = false; empty.hidden = true;
+    const c = camState[cam]; c.t = f.t; c.seen = c.seen.filter(x => Date.now() - x < 3000).concat(Date.now());
+    paintCams();
+  },
+};
+
+el('btn-connect').addEventListener('click', function(){
+  const code = (el('code').value || '').trim().toUpperCase() || 'LAB-4417';
+  if(!BENCHES[code]){
+    el('connect-hint').innerHTML = 'No bench is publishing as <b class="mono">' + code.replace(/[^A-Z0-9-]/g,'') + '</b>. Try <b class="mono">LAB-4417</b>.';
+    return;
+  }
+  benchCode = code; heldOff = false; clearTimeout(backToReplay); backToReplay = null;
+  goLive('manual');
+  el('connect-hint').innerHTML = 'Connected. The arm above follows the joints <b class="mono">' + code +
+    '</b> publishes, pushed by a Convex live query. Start a run in the <a href="/console.html" style="color:var(--reagent)">console</a> to watch it move.';
+  heroEl.scrollIntoView({ behavior: RM ? 'auto' : 'smooth', block:'start' });
+});
+el('btn-disconnect').addEventListener('click', function(){
+  heldOff = true; goReplay();
+  el('connect-hint').innerHTML = 'Bench <b class="mono">LAB-4417</b> is our Cal Hacks bench. While a run is going, the arm above switches to its live joints by itself.';
+});
+function toConnect(){ el('connect').scrollIntoView({ behavior: RM ? 'auto' : 'smooth', block:'start' });
+  setTimeout(function(){ el('code').focus(); }, RM ? 0 : 520); }
+el('cta-connect').addEventListener('click', toConnect);
+
+/* ── scroll motion ─────────────────────────────────────────────────────── */
+(function scrollMotion(){
+  const bar = el('scrollbar');
+  addEventListener('scroll', function(){
+    const h = document.documentElement.scrollHeight - innerHeight;
+    bar.style.width = (h > 0 ? scrollY/h*100 : 0) + '%';
+  }, { passive:true });
+
+  /* only hide-then-reveal once we know the observer is live */
+  if(!('IntersectionObserver' in window)) return;
+  const marks = [];
+  Array.prototype.forEach.call(document.querySelectorAll('.band > .wrap > .head'), e => marks.push([e,0]));
+  Array.prototype.forEach.call(document.querySelectorAll('.four > div'), (e,i) => marks.push([e, i%4]));
+  Array.prototype.forEach.call(document.querySelectorAll('.two > *'), (e,i) => marks.push([e, i%2]));
+  Array.prototype.forEach.call(document.querySelectorAll('.spec'), (e,i) => marks.push([e, i%4]));
+  Array.prototype.forEach.call(document.querySelectorAll('.connect, footer .wrap'), e => marks.push([e,0]));
+  marks.forEach(([e,d]) => { e.classList.add('rv'); if(d) e.classList.add('rv-d' + d); });
+  document.documentElement.classList.add('js-anim');
+  setTimeout(function(){ heroEl.classList.add('ready'); }, 6000);
+
+  const io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); } });
+  }, { rootMargin:'0px 0px -12% 0px', threshold:0.08 });
+  marks.forEach(([e]) => io.observe(e));
+  /* anything already on screen reveals immediately, so the first frame is complete */
+  requestAnimationFrame(function(){
+    marks.forEach(([e]) => { const r = e.getBoundingClientRect(); if(r.top < innerHeight) e.classList.add('in'); });
+  });
+
+  /* spec figures count up as the rail arrives */
+  Array.prototype.forEach.call(document.querySelectorAll('.spec b'), function(bEl){
+    const raw = bEl.firstChild && bEl.firstChild.nodeValue;
+    if(!raw) return;
+    const m = raw.match(/^(±?)([\d.]+)$/); if(!m) return;
+    const sign = m[1], end = parseFloat(m[2]), dec = (m[2].split('.')[1] || '').length;
+    new IntersectionObserver(function(e, ob){
+      if(!e[0].isIntersecting) return; ob.disconnect();
+      const t0 = performance.now(), dur = 850;
+      (function step(now){
+        const u = Math.min((now - t0)/dur, 1), e2 = 1 - Math.pow(1-u, 3);
+        bEl.firstChild.nodeValue = sign + (end*e2).toFixed(dec);
+        if(u < 1) requestAnimationFrame(step);
+      })(t0);
+    }, { threshold:.5 }).observe(bEl);
+  });
+})();
+
+initScene().catch(function(err){ console.error(err); loadingEl.innerHTML = '<div>3D view unavailable</div>'; });
+
+
+</script>
+<script type="module" src="/src/landing-live.ts"></script>
+
+</body></html>

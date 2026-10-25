@@ -1,0 +1,286 @@
+{
+ "links": {
+  "base_link": {
+   "glb": "meshes/base_link.json",
+   "faces": 18000
+  },
+  "link1": {
+   "glb": "meshes/link1.json",
+   "faces": 17999
+  },
+  "link2": {
+   "glb": "meshes/link2.json",
+   "faces": 51171
+  },
+  "link3": {
+   "glb": "meshes/link3.json",
+   "faces": 49254
+  },
+  "link4": {
+   "glb": "meshes/link4.json",
+   "faces": 35999
+  },
+  "link5": {
+   "glb": "meshes/link5.json",
+   "faces": 25272
+  },
+  "link6": {
+   "glb": "meshes/link6.json",
+   "faces": 18000
+  },
+  "gripper_end": {
+   "glb": "meshes/gripper_end.json",
+   "faces": 23096
+  },
+  "gripper_left": {
+   "glb": "meshes/gripper_left.json",
+   "faces": 17246
+  },
+  "gripper_right": {
+   "glb": "meshes/gripper_right.json",
+   "faces": 17246
+  }
+ },
+ "joints": [
+  {
+   "name": "joint1",
+   "type": "revolute",
+   "parent": "base_link",
+   "child": "link1",
+   "xyz": [
+    -0.00034283,
+    -0.00098683,
+    0.075
+   ],
+   "rpy": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "limit": [
+    -2.8,
+    2.8
+   ]
+  },
+  {
+   "name": "joint2",
+   "type": "revolute",
+   "parent": "link1",
+   "child": "link2",
+   "xyz": [
+    0.020343,
+    0.027237,
+    0.07
+   ],
+   "rpy": [
+    -1.5708,
+    0.0,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "limit": [
+    0.0,
+    3.14
+   ]
+  },
+  {
+   "name": "joint3",
+   "type": "revolute",
+   "parent": "link2",
+   "child": "link3",
+   "xyz": [
+    -0.236,
+    0.0,
+    0.0
+   ],
+   "rpy": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "limit": [
+    0.0,
+    3.14
+   ]
+  },
+  {
+   "name": "joint4",
+   "type": "revolute",
+   "parent": "link3",
+   "child": "link4",
+   "xyz": [
+    0.228,
+    -0.072746,
+    0.0045
+   ],
+   "rpy": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "limit": [
+    -1.57,
+    1.57
+   ]
+  },
+  {
+   "name": "joint5",
+   "type": "revolute",
+   "parent": "link4",
+   "child": "link5",
+   "xyz": [
+    0.087,
+    -0.048,
+    -0.03075
+   ],
+   "rpy": [
+    -1.5708,
+    0.0,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "limit": [
+    -1.57,
+    1.57
+   ]
+  },
+  {
+   "name": "joint6",
+   "type": "revolute",
+   "parent": "link5",
+   "child": "link6",
+   "xyz": [
+    0.0365,
+    0.0,
+    0.048
+   ],
+   "rpy": [
+    0.0,
+    1.5708,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "limit": [
+    -3.14,
+    3.14
+   ]
+  },
+  {
+   "name": "j_gripper_end",
+   "type": "fixed",
+   "parent": "link6",
+   "child": "gripper_end",
+   "xyz": [
+    0.0,
+    0.0,
+    0.16621
+   ],
+   "rpy": [
+    3.1416,
+    -1.5708,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "limit": null
+  },
+  {
+   "name": "gripper_joint1",
+   "type": "prismatic",
+   "parent": "gripper_end",
+   "child": "gripper_left",
+   "xyz": [
+    -0.041939,
+    -7.3385e-05,
+    0.0
+   ],
+   "rpy": [
+    1.5708,
+    -1.5708,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "limit": [
+    0.0,
+    0.05
+   ]
+  },
+  {
+   "name": "gripper_joint2",
+   "type": "prismatic",
+   "parent": "gripper_end",
+   "child": "gripper_right",
+   "xyz": [
+    -0.041939,
+    7.3385e-05,
+    0.0
+   ],
+   "rpy": [
+    -1.5708,
+    -1.5708,
+    0.0
+   ],
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "limit": [
+    0.0,
+    0.0715
+   ]
+  }
+ ],
+ "telemetry_to_joint": {
+  "joints[0]": "joint1",
+  "joints[1]": "joint2",
+  "joints[2]": "joint3",
+  "joints[3]": "joint4",
+  "joints[4]": "joint5",
+  "joints[5]": "joint6",
+  "gripper_deg": "joint_left/joint_right (see note)"
+ },
+ "units": {
+  "telemetry": "degrees from follower zero pose",
+  "urdf": "radians; joint value = radians(telemetry_deg), no sign flip, no offset (same convention as robotics/kinematics.py and Seeed's ROS driver)"
+ },
+ "frames": {
+  "urdf_up": "+Z",
+  "three_js_up": "+Y",
+  "fix": "rotate the robot root -90 deg about X in three.js"
+ }
+}

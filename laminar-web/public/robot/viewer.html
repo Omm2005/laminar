@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><title>reBot live</title>
+<style>html,body{margin:0;height:100%;background:#0b0f14}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"./node_modules/three/build/three.module.js","three/addons/":"./node_modules/three/examples/jsm/"}}</script>
+</head><body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// ---- build the arm from robot.json + per-link GLBs (URDF frames, z-up) ----
+export async function loadRobot(base='./') {
+  const spec = await (await fetch(base+'robot.json')).json();
+  const loader = new GLTFLoader();
+  const links = {};                       // name -> THREE.Group (link frame)
+  for (const name of Object.keys(spec.links)) links[name] = new THREE.Group();
+  for (const j of spec.joints) { if (!links[j.child]) links[j.child] = new THREE.Group(); if (!links[j.parent]) links[j.parent] = new THREE.Group(); }
+  const joints = {};                      // name -> {group, axis, type}
+  for (const j of spec.joints) {
+    const jointFrame = new THREE.Group();  // fixed origin of the joint in parent frame
+    jointFrame.position.set(...j.xyz);
+    jointFrame.rotation.set(j.rpy[0], j.rpy[1], j.rpy[2], 'ZYX');  // URDF rpy = Rz(y)*Ry(p)*Rx(r)
+    const moving = new THREE.Group();      // rotates/slides about the axis
+    jointFrame.add(moving); moving.add(links[j.child]); links[j.parent].add(jointFrame);
+    joints[j.name] = { group: moving, axis: j.axis ? new THREE.Vector3(...j.axis) : null, type: j.type, limit: j.limit };
+  }
+  const root = new THREE.Group(); root.add(links['base_link']);
+  root.rotation.x = -Math.PI/2;           // URDF z-up -> three.js y-up
+  await Promise.all(Object.entries(spec.links).map(([name, info]) => new Promise(res => loader.load(base+info.glb, g => {
+    g.scene.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; o.material.metalness = 0.15; o.material.roughness = 0.6; } });
+    links[name].add(g.scene); res();
+  }, undefined, e => { console.error('mesh', name, e); res(); }))));
+  function setJoint(name, value) { const j = joints[name]; if (!j || !j.axis) return;
+    if (j.limit) value = Math.min(j.limit[1], Math.max(j.limit[0], value));
+    if (j.type === 'prismatic') j.group.position.copy(j.axis).multiplyScalar(value);
+    else j.group.quaternion.setFromAxisAngle(j.axis, value); }
+  // telemetry = six degrees from the follower zero pose, same convention as robotics/kinematics.py
+  function setFromTelemetry(deg6, gripperDeg) { for (let i=0;i<6;i++) setJoint('joint'+(i+1), THREE.MathUtils.degToRad(deg6[i]||0));
+    if (gripperDeg!=null) { const m = Math.max(0, Math.min(0.05, gripperDeg/100*0.05)); setJoint('joint_left', m); setJoint('joint_right', m); } }
+  return { root, setJoint, setFromTelemetry, joints, links };
+}
+// ---- demo scene ----
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b0f14);
+const cam = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.01, 10); cam.position.set(0.9, 0.7, 0.9);
+const r = new THREE.WebGLRenderer({antialias:true}); r.setPixelRatio(Math.min(devicePixelRatio,2)); r.setSize(innerWidth, innerHeight); r.shadowMap.enabled = true; document.body.appendChild(r.domElement);
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x202020, 0.9)); const key = new THREE.DirectionalLight(0xffffff, 1.6); key.position.set(1,2,1); key.castShadow = true; key.shadow.mapSize.set(2048,2048); scene.add(key);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(0.8, 64), new THREE.ShadowMaterial({opacity:0.35})); floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+scene.add(new THREE.GridHelper(1.6, 16, 0x1f2a36, 0x16202a));
+const robot = await loadRobot('./'); scene.add(robot.root);
+const controls = new OrbitControls(cam, r.domElement); controls.target.set(0, 0.3, 0);
+const q = new URLSearchParams(location.search); const pose = (q.get('q')||'0,0,0,0,0,0').split(',').map(Number);
+robot.setFromTelemetry(pose, Number(q.get('g')||40));
+window.robot = robot; window.READY = true;
+(function loop(){ controls.update(); r.render(scene, cam); requestAnimationFrame(loop); })();
+</script></body></html>
