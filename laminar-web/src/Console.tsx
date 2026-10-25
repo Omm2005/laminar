@@ -3,7 +3,6 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import { DYE, ErrorChart, Status, Via, ago, clock, fmtSigned, useName } from "./ui";
-import Game from "./Game";
 import Data from "./Data";
 import Builder from "./Builder";
 import LiveArm from "./robot/LiveArm";
@@ -13,7 +12,7 @@ import StreamField from "./StreamField";
 import { APPROVE, CANCEL, STOP, readBack, useHoldToTalk, useSpeaker } from "./Voice";
 
 const TABS = [
-  ["run", "Run"], ["chat", "Assistant"], ["builder", "Protocol builder"], ["qc", "Run log & QC"], ["reports", "Reports"], ["audit", "Audit"], ["game", "Beat the robot"], ["data", "Tiger Data"],
+  ["run", "Run"], ["chat", "Assistant"], ["builder", "Protocol builder"], ["qc", "Run log & QC"], ["reports", "Reports"], ["audit", "Audit"], ["data", "Tiger Data"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
@@ -38,7 +37,10 @@ export default function Console() {
   const [tab, setTab] = useState<Tab>(() => {
     const q = new URLSearchParams(location.search).get("tab");
     if (q && TABS.some(([id]) => id === q)) return q as Tab;
-    try { return (localStorage.getItem("laminar.tab") as Tab) || "run"; } catch { return "run"; }
+    try {
+      const saved = localStorage.getItem("laminar.tab");               // a tab that no longer exists -> Run
+      return saved && TABS.some(([id]) => id === saved) ? (saved as Tab) : "run";
+    } catch { return "run"; }
   });
   useEffect(() => { try { localStorage.setItem("laminar.tab", tab); } catch { /* ignore */ } }, [tab]);
   const [name, setName] = useName();
@@ -88,7 +90,6 @@ export default function Console() {
         {tab === "qc" && <QcTab />}
         {tab === "reports" && <ReportsTab />}
         {tab === "audit" && <AuditTab />}
-        {tab === "game" && <Game name={name} />}
         {tab === "data" && <Data />}
       </div>
     </main>
