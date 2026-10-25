@@ -116,3 +116,14 @@ def test_tray_outside_the_scan_view_found_with_the_base_turned():
     pose = T.find_tray(frame, calib, dj1)
     for i, cont in T.MARKERS.items():
         assert np.linalg.norm(pose["containers"][cont] - true[i]) < 2.0, (i, pose["containers"][cont], true[i])
+
+
+def test_lock_in_averages_two_detections():
+    calib = calib_for(tray_markers((300, 0), 0))
+    true = tray_markers((310, 20), 15)
+    a = T.find_tray(render(true, 15, ids=[10, 11, 12, 13]), calib)
+    b = T.find_tray(render(true, 15, ids=[11, 13]), calib)
+    pose = T.lock_in([a, b])
+    assert pose["seen"] == [10, 11, 12, 13] and pose["spread_mm"] < 2.0
+    for i, cont in T.MARKERS.items():
+        assert np.linalg.norm(pose["containers"][cont] - true[i]) < 1.5

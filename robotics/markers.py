@@ -68,6 +68,7 @@ TOUCH_MAX_Z_MM = 100.0  # calibrate touch: the tip counts as on the table below 
 STATE_MAX_AGE_S = 1.0  # teleop_state.json older than this = teleop.py is not running
 MOVE_SPEED = 15.0      # deg/s for the joint move to the scan pose
 SWEEP_DEG = (0, 25, -25, 50, -50)  # visit: base turns (J1, from the scan pose) tried until the tray is seen
+LOCK_PHOTOS = 2        # visit: photos at the angle where the tray is first seen; their poses are averaged
 
 
 def detect_markers(image) -> list[tuple[int, np.ndarray]]:
@@ -168,6 +169,17 @@ def find_tray(frame, calib: dict, dj1: float = 0.0) -> dict:
     pose = tray_pose(calib["layout_mm"], xy)
     pose["px"] = px
     return pose
+
+
+def lock_in(looks: list[dict]) -> dict:
+    """Average tray detections taken from the same base angle into one locked pose: each container's position is
+    the mean over the photos; "spread_mm" = how far the photos disagree (worst container)."""
+    conts = {k: np.mean([lk["containers"][k] for lk in looks], axis=0) for k in looks[0]["containers"]}
+    spread = max(float(np.linalg.norm(lk["containers"][k] - conts[k])) for lk in looks for k in conts)
+    best = max(looks, key=lambda lk: len(lk["seen"]))
+    return {**best, "containers": conts, "spread_mm": spread,
+            "seen": sorted({i for lk in looks for i in lk["seen"]}),
+            "xy": np.mean([lk["xy"] for lk in looks], axis=0)}
 
 
 SQUARE = np.array([[-1, 1], [1, 1], [1, -1], [-1, -1]], float)  # ArUco corner order, seen from above
@@ -592,31 +604,31 @@ def cmd_visit(a) -> None:
         client = ArmClient()
         client.current_joints()  # refuses now if arm_server.py isn't running
         pose = None
-        for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view (all 4 markers, or the most seen)
+        for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view, then lock in at that angle
             q_look = {**q_scan, 1: q_scan[1] + dj1}
             input(f"Enter: joint move to the scan pose{f' with the base turned {dj1:+g} deg' if dj1 else ''} "
                   f"at {MOVE_SPEED:g} deg/s (Ctrl+C stops) ")
             client._send({"op": "move", "joints": {str(j): v for j, v in q_look.items()}, "speed": MOVE_SPEED})
+            looks = []
             cap = open_camera(a.camera)
             try:
-                frame = grab(cap, settle=10)
+                for n in range(LOCK_PHOTOS):  # first detection, then a second photo to confirm it
+                    time.sleep(0.5 if n else 0.0)
+                    try:
+                        looks.append(find_tray(grab(cap, settle=10), calib, dj1))
+                    except ValueError as e:
+                        print(f"  base {dj1:+g} deg, photo {n + 1}: {e}")
             finally:
                 cap.release()
-            try:
-                look = find_tray(frame, calib, dj1)
-            except ValueError as e:
-                print(f"  base {dj1:+g} deg: {e}")
-                continue
-            print(f"  base {dj1:+g} deg: markers {look['seen']}")
-            if pose is None or len(look["seen"]) > len(pose["seen"]):
-                pose, q_from = look, q_look
-            if len(pose["seen"]) == len(MARKERS):
+            if looks:
+                pose = lock_in(looks)
+                q_scan = q_look
+                print(f"  base {dj1:+g} deg: locked in on the tray from {len(looks)} detection(s), "
+                      f"markers {pose['seen']}" + (f", photos agree within {pose['spread_mm']:.1f} mm"
+                                                   if len(looks) > 1 else ""))
                 break
         if pose is None:
             raise SystemExit("tray not found at any base angle")
-        if q_from != q_look:  # the best view was an earlier angle: go back there before planning from it
-            client._send({"op": "move", "joints": {str(j): v for j, v in q_from.items()}, "speed": MOVE_SPEED})
-        q_scan = q_from
     else:
         if not a.image:
             raise SystemExit("without --run, give a scan-pose photo: --image tray_scan_1.jpg [--dj1 deg]")
