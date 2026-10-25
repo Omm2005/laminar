@@ -103,12 +103,14 @@ class Watch:
         happens in this one thread (OpenCV windows want that)."""
         import cv2
         import live_view
+        side_latest = live_view.LatestJpeg()
         n, t_save = 0, 0.0
         while not self._stop.is_set():
             frame, _ = self.cam.read()
             if frame is None:
                 time.sleep(0.05)
                 continue
+            side_latest.offer(frame)        # full frame for the website (publish.py), never blocks
             img = frame.copy()
             for name in self.names:
                 x, y, w, h = (int(v) for v in self.tracker.columns[name].roi)

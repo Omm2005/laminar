@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -63,6 +64,35 @@ class ReplayCam:
 BOXES_FILE = HERE / "live_boxes.json"
 VIEW_MARGIN_PX = 60          # shown above the highest box: room for the labels and the banner
 VIEW_SIDE_PX, VIEW_BOTTOM_PX = 40, 22   # beside the outer boxes, below the lowest one (the rate label)
+
+
+SIDE_LATEST = HERE.parent / "robotics" / "side_latest.jpg"   # newest side frame, for robotics/publish.py (website)
+
+
+class LatestJpeg:
+    """Keeps `path` holding the newest frame (full, uncropped), at most `hz` times a second, for readers like
+    robotics/publish.py. offer() never blocks the camera's loop: the write happens on its own thread, and a frame
+    offered while the last one is still being written is just skipped. Atomic: .tmp, then os.replace."""
+
+    def __init__(self, path: Path = SIDE_LATEST, hz: float = 5.0):
+        self.path, self.period, self.t_last = Path(path), 1.0 / hz, 0.0
+        self._busy = threading.Lock()
+
+    def offer(self, frame: np.ndarray) -> None:
+        if frame is None or time.time() - self.t_last < self.period or not self._busy.acquire(blocking=False):
+            return
+        self.t_last = time.time()
+        threading.Thread(target=self._write, args=(frame.copy(),), daemon=True).start()
+
+    def _write(self, frame: np.ndarray) -> None:
+        try:
+            tmp = self.path.with_suffix(".tmp.jpg")
+            cv2.imwrite(str(tmp), frame)
+            os.replace(tmp, self.path)
+        except Exception:
+            pass  # a reader has it open, disk hiccup...: the next frame will do
+        finally:
+            self._busy.release()
 
 
 def tray_view(img: np.ndarray, boxes, top: int = VIEW_MARGIN_PX, side: int = VIEW_SIDE_PX,
@@ -507,6 +537,7 @@ def main():
     if live:
         out_fps = 10.0                  # live: a steady 10 frames a second of wall time, so it plays at real speed
     next_write = None
+    side_latest = LatestJpeg()
     try:
         while True:
             frame, ts = cam.read()
@@ -519,6 +550,8 @@ def main():
             now = time.time()
             fps = 0.9 * fps + 0.1 / max(now - t_prev, 1e-3)
             t_prev = now
+            if live:
+                side_latest.offer(frame)                          # for the website (publish.py)
             if ts != last_ts or not a.save:
                 view = draw(frame, tracker, names, start_ml, a.capacity_ml, fps, targets, state)
             if ts != stats_ts:                                      # stats once per new camera/video frame
