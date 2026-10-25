@@ -1,4 +1,4 @@
-"""Smooth a teleop-recorded joint path (paths/<name>.py) before replaying it.
+"""Smooth every joint path arm_server plays (teleop recordings above all) before it moves the arm.
 
 The recordings are 20 Hz human motion: tremor, 0.1 deg steps, and arm_server joins the points with straight
 lines, so the commanded velocity jumps every 50 ms (that is what the jerk column on the Runs page shows).
@@ -67,6 +67,13 @@ def smooth(points: list[dict[int, float]], hz: float, sigma_s: float = SIGMA_S,
     return out, out_hz
 
 
+def max_deviation(raw: list[dict[int, float]], hz: float, sm: list[dict[int, float]], shz: float) -> float:
+    """Largest difference (deg, any arm joint) between a path and its smoothed version, at the raw times."""
+    t_in = np.arange(len(raw)) / hz
+    t_sm = np.arange(len(sm)) / shz
+    return max(float(np.abs(np.interp(t_in, t_sm, [p[j] for p in sm]) - [p[j] for p in raw]).max()) for j in ARM)
+
+
 def jerk_rms(points: list[dict[int, float]], hz: float, step_hz: float = 100.0) -> float:
     """RMS jerk (deg/s^3) of the command arm_server actually plays: linear between points, sampled at step_hz."""
     arm = np.array([[p[j] for j in ARM] for p in points], dtype=float)
@@ -86,10 +93,8 @@ def main() -> None:
     m = load(a.name)
     pts, hz = m["points"], m["hz"]
     sm, shz = smooth(pts, hz, a.sigma)
-    t_in = np.arange(len(pts)) / hz
-    dev = max(abs(np.interp(t_in, np.arange(len(sm)) / shz, [p[j] for p in sm]) - [p[j] for p in pts]).max()
-              for j in ARM)
-    print(f"{a.name}: {len(pts)} pts @ {hz:g} Hz -> {len(sm)} pts @ {shz:g} Hz, {t_in[-1]:.1f} s")
+    dev = max_deviation(pts, hz, sm, shz)
+    print(f"{a.name}: {len(pts)} pts @ {hz:g} Hz -> {len(sm)} pts @ {shz:g} Hz, {(len(pts) - 1) / hz:.1f} s")
     print(f"  max deviation from the recording {dev:.2f} deg; end point unchanged: "
           f"{all(abs(sm[-1][j] - pts[-1][j]) < 1e-9 for j in ARM)}")
     print(f"  commanded RMS jerk {jerk_rms(pts, hz):,.0f} -> {jerk_rms(sm, shz):,.0f} deg/s^3")

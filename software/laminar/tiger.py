@@ -493,6 +493,7 @@ def main() -> int:
         run = RunLogger(TigerSink(connect), run_id, a.name or " ".join(cmd)[:120],
                         {"cmd": cmd, "cwd": os.getcwd()})
         print(f"tiger run {run_id}: {' '.join(cmd)}", flush=True)
+        os.environ["LAMINAR_RUN_ID"] = run_id  # the arm scripts inside log under this run, not their own
         status, code = "failed", None
         try:
             code = subprocess.call(cmd)

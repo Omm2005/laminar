@@ -28,6 +28,7 @@ from pathlib import Path as FilePath
 
 import numpy as np
 
+import run_log
 from motion import Path, fk_mm
 
 HERE = FilePath(__file__).resolve().parent
@@ -96,6 +97,14 @@ class ArmClient:
         if self.dry_run:
             print("DRY RUN would send:", json.dumps(cmd)[:200])
             return {"result": "dry run"}
+        run_log.started()  # every process that moves the arm is a Tiger run (no-op without TIGER_DATABASE_URL)
+        try:
+            return self._send_and_wait(cmd, wait)
+        except (RuntimeError, TimeoutError) as e:
+            run_log.failed(str(e))
+            raise
+
+    def _send_and_wait(self, cmd: dict, wait: bool) -> dict:
         self._write_atomic(CMD_FILE, cmd)
         self._last_id = cmd["id"]
         start = time.time()

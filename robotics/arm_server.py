@@ -15,6 +15,8 @@ Creating a file named STOP also returns to rest and exits.
 
 Usage:  python arm_server.py [--hold-grip]   (--hold-grip: the gripper is holding an object at startup;
         keep squeezing it lightly instead of relaxing the jaws)
+By default every path is smoothed (smooth_path.py; --raw-paths turns it off) and, when compensation.json exists,
+the gravity + friction feedforward fitted from Tiger data is added (compensation.py; --no-comp turns it off).
 """
 import json
 import math
@@ -31,6 +33,7 @@ STATUS_FILE = HERE / "arm_status.json"
 TILT_FILE = HERE / "arm_tilt.json"   # live pour-roll targets for the tilt_stream op
 PATH_START_TOL_DEG = 2.0    # a path must start where the arm is commanded now
 PATH_MAX_JOINT_SPEED = 90.0  # deg/s between consecutive path points; faster = refused
+SMOOTH_MAX_DEV_DEG = 3.0    # every path is smoothed (smooth_path.py) unless that would move it further than this
 STOP_FILE = HERE / "STOP"
 GRIPPER = 7
 HZ = 100.0
@@ -74,16 +77,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hold-grip", action="store_true")
     ap.add_argument("--hold-torque", type=float, default=1.0)
-    ap.add_argument("--comp", nargs="?", const=str(HERE / "compensation.json"), default=None,
-                    help="add the gravity + friction feedforward fitted from Tiger data (compensation.py)")
+    ap.add_argument("--no-comp", action="store_true",
+                    help="skip the gravity + friction feedforward from compensation.json (on by default when it exists)")
+    ap.add_argument("--raw-paths", action="store_true", help="play paths exactly as sent, without smoothing")
+    ap.add_argument("--comp", nargs="?", const=True, default=None, help=argparse.SUPPRESS)  # old flag: now the default
     ap.add_argument("--idle-min", type=float, default=IDLE_TIMEOUT_S / 60,
                     help="rest and exit after this many minutes with no command (camera calibration can take long)")
     args = ap.parse_args()
     zero = load_follower_zero()
     comp = None
-    if args.comp:
+    if not args.no_comp and (HERE / "compensation.json").exists():
         from compensation import Compensation
-        comp = Compensation.load(args.comp)
+        comp = Compensation.load(HERE / "compensation.json")
         print(f"compensation: gravity {comp.gravity_scale}, friction {comp.friction_nm} N.m", flush=True)
     ids = list(JOINTS)
     dt = 1.0 / HZ
@@ -232,6 +237,18 @@ def main():
                 return f"path refused: a step needs {jump * hz:.0f} deg/s (> {PATH_MAX_JOINT_SPEED:.0f})"
         pts = [{m: clamp(m, p.get(m, cmd[m])) for m in arm_ids} for p in points]
         grips = [clamp(GRIPPER, p[GRIPPER]) for p in points] if all(GRIPPER in p for p in points) else None
+        smoothed = ""
+        if not args.raw_paths and len(pts) >= 4:
+            from smooth_path import max_deviation, smooth
+            raw = [{**p, GRIPPER: g} for p, g in zip(pts, grips)] if grips else pts
+            sm, shz = smooth(raw, hz)
+            dev = max_deviation(raw, hz, sm, shz)
+            if dev <= SMOOTH_MAX_DEV_DEG:  # gripper targets are only resampled, never changed
+                pts = [{m: p[m] for m in arm_ids} for p in sm]
+                grips = [p[GRIPPER] for p in sm] if grips else None
+                hz, smoothed = shz, f" (smoothed, max {dev:.1f} deg off)"
+            else:
+                smoothed = f" (not smoothed: would move it {dev:.1f} deg)"
         if grips:
             grip["limit"], grip["teleop_hold"] = GRIP_MOVE_TORQUE, True
         duration = (len(pts) - 1) / hz
@@ -250,7 +267,7 @@ def main():
                 t_status = time.time()
                 write_status(busy=True, progress=round(x / max(1, len(pts) - 1), 2), doing="path")
             if x >= len(pts) - 1:
-                return f"path: {len(pts)} points in {duration:.1f}s"
+                return f"path: {len(pts)} points in {duration:.1f}s{smoothed}"
 
     def tilt_stream(joint, base, max_rate, timeout_s):
         """Live control of one joint (the pour roll) from TILT_FILE: {"seq": n, "deg": offset, "done": bool}.
