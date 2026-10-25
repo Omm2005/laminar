@@ -1,0 +1,6 @@
+# Per-vial pour corrections, tray frame (x = along the tray, marker 10 -> 13; y = across), mm, added to the
+# container's offset (container_offsets.yaml) by deliver.pour_pose. Each vial sits in the jaws a little differently.
+vials:
+  vial_B:
+    dxy_mm: [-10.2, 0.0]
+    note: "B2b 2026-10-25 02:25 poured one channel towards c from the pour pose where vial A poured into B (02:01)"

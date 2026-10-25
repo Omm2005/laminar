@@ -148,12 +148,26 @@ def tilt_sign(q, direction) -> float:
     return 1.0 if float((R2[:, 2] - R[:, 2])[:2] @ np.asarray(direction, float)) >= 0.0 else -1.0
 
 
-def pour_pose(pose: dict, cont: int, offsets: dict) -> tuple[np.ndarray, np.ndarray, dict]:
+VIAL_OFFSETS_FILE = T.HERE / "vial_offsets.yaml"
+
+
+def load_vial_offsets(path=VIAL_OFFSETS_FILE) -> dict:
+    """{vial: (dx, dy) mm in the tray frame}: each vial sits in the jaws a little differently (its own teleop grab),
+    so its mouth pours a little off where another vial's does from the same gripper pose. Corrections from real
+    pours; the gripper's heading is fixed relative to the tray, so a tray-frame correction moves with the markers."""
+    if not path.exists():
+        return {}
+    return {k: tuple(v["dxy_mm"]) for k, v in (yaml.safe_load(path.read_text()) or {}).get("vials", {}).items()}
+
+
+def pour_pose(pose: dict, cont: int, offsets: dict, vial: str | None = None) -> tuple[np.ndarray, np.ndarray, dict]:
     """Where the gripper goes over container `cont` for the tray seen now: (tip mm, orientation 3x3, IK seed joints).
-    The learned offset turned and moved with the tray; the height is the learned one."""
+    The learned offset (plus this vial's correction, vial_offsets.yaml) turned and moved with the tray; the height
+    is the learned one."""
     off = offsets[cont]
     th = float(pose["heading_deg"])
-    xy = np.asarray(pose["containers"][cont], float) + T.rot(th) @ np.asarray(off["dxy_mm"], float)
+    dxy = np.asarray(off["dxy_mm"], float) + np.asarray(load_vial_offsets().get(vial, (0.0, 0.0)), float)
+    xy = np.asarray(pose["containers"][cont], float) + T.rot(th) @ dxy
     p = np.array([xy[0], xy[1], float(off["z_mm"]) - EXTRA_LOWER_MM])  # EXTRA_LOWER_MM below the taught height
     R = T.yaw(th) @ np.asarray(off["R_tray"], float)
     q0 = {int(j): float(v) for j, v in off["joints"].items()}
@@ -300,7 +314,7 @@ def main(argv=None) -> None:
 
     offsets = load_offsets()
     if cont in offsets:
-        p, R, seed = pour_pose(pose, cont, offsets)
+        p, R, seed = pour_pose(pose, cont, offsets, vial)
         print(f"{vial} -> container {'abcd'[cont - 1]} ({cont}): pour pose ({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f}) mm, "
               f"tray heading {pose['heading_deg']:.1f} deg, seen from markers {pose['seen']}")
         try:
