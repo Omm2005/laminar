@@ -74,7 +74,7 @@ class LatestJpeg:
     robotics/publish.py. offer() never blocks the camera's loop: the write happens on its own thread, and a frame
     offered while the last one is still being written is just skipped. Atomic: .tmp, then os.replace."""
 
-    def __init__(self, path: Path = SIDE_LATEST, hz: float = 5.0):
+    def __init__(self, path: Path = SIDE_LATEST, hz: float = 15.0):
         self.path, self.period, self.t_last = Path(path), 1.0 / hz, 0.0
         self._busy = threading.Lock()
 
