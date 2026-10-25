@@ -216,7 +216,11 @@ def center_on_markers(c, J: np.ndarray | None) -> tuple[np.ndarray | None, dict]
         p, _ = M.fk_mm(q)
         if p[2] < MIN_TOOL_Z_MM:
             break
-        _shift(c, d, "centre on markers")
+        try:
+            _shift(c, d, "centre on markers")
+        except M.PlanError as e:  # planned before any motion: the arm has not moved, photograph from here
+            print(f"  centring stopped short: {e}")
+            break
         _, _, dets = _snap(c)
         if len(dets) < 2:
             break

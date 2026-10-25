@@ -3,7 +3,7 @@
 Only one process can open a camera on Windows, so this one owns it and markers.py reads wrist_latest.jpg while
 it runs (and opens the camera itself when it doesn't). Close with q / Esc in the window.
 
-    python wrist_stream.py [--camera 2]
+    python wrist_stream.py [--camera 1]
 """
 import argparse
 import os
@@ -16,7 +16,7 @@ LATEST = Path(__file__).resolve().parent / "wrist_latest.jpg"
 SAVE_HZ = 10.0
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--camera", type=int, default=2, help="wrist camera index (indices shift after re-plugs)")
+ap.add_argument("--camera", type=int, default=1, help="wrist camera index (indices shift after re-plugs)")
 a = ap.parse_args()
 cap = cv2.VideoCapture(a.camera, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
