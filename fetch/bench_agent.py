@@ -23,6 +23,7 @@ Settings (environment, or KEY=value lines in the repo's .env / ~/laminar/.env, g
     BENCH_AGENT_SEED     the agent's identity (any long secret string; keep it: the address comes from it)
     LAMINAR_CONVEX_URL   the dashboard backend (default: console/.env.local, written by `bunx convex dev`)
     BENCH_AGENT_PORT     default 8001
+    BENCH_AGENT_HANDLE   default laminar-bench: reach it as @laminar-bench in ASI:One (unique on Agentverse)
     BENCH_AGENT_MAILBOX  1 (default): reachable through its Agentverse mailbox (ASI:One); 0: local endpoint only
 """
 from __future__ import annotations
@@ -74,6 +75,7 @@ agent = Agent(
     mailbox=mailbox,
     endpoint=None if mailbox else [f"http://127.0.0.1:{port}/submit"],
     readme_path=str(HERE / "AGENT_README.md"),
+    handle=env("BENCH_AGENT_HANDLE", "laminar-bench"),   # @laminar-bench in ASI:One (set when the mailbox connects)
     description="Remote wet-lab bench: a camera-checked robot arm pours measured volumes of liquid into containers "
                 "for other labs. Ask in plain words; a person at the bench approves; you get the measured volumes.",
     publish_agent_details=True,

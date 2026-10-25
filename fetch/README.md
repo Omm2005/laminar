@@ -62,16 +62,17 @@ instead (Profile > API Keys) and put `AGENTVERSE_API_KEY=...` in `.env`. Then ru
 
 ## Test it
 
-**In ASI:One:** go to [asi1.ai](https://asi1.ai) and start a new chat. Type `@`, pick **Laminar Bench**, or paste
-its address `agent1q0tmdu5gxt24ek7kssha604plf2995lvdtw9nq69av9654uz2c4a2456qwp`. Every message needs this @mention,
-or it goes to ASI:One's own AI. You can also open the agent on Agentverse and click *Chat with Agent*.
+**In ASI:One:** go to [asi1.ai](https://asi1.ai) and start a new chat. Type **`@laminar-bench`** and pick
+*Laminar Bench* from the suggestions (address `agent1q0tmdu5gxt24ek7kssha604plf2995lvdtw9nq69av9654uz2c4a2456qwp`).
+Every message needs this @mention, or it goes to ASI:One's own AI. You can also find it by searching "liquid
+handling robot" on Agentverse, where it ranks first, and click *Chat with Agent*.
 
-1. `@Laminar Bench What's on the bench?` lists the vials, liquids and containers.
-2. `@Laminar Bench Pour 1 mL of the blue dye into container 2 and tell me what the camera measures.` You get the
+1. `@laminar-bench What's on the bench?` lists the vials, liquids and containers.
+2. `@laminar-bench Pour 1 mL of the blue dye into container 2 and tell me what the camera measures.` You get the
    checked plan, "waiting for approval".
-3. `@Laminar Bench approve` works on the simulated bench. On the real arm, the technician approves on the Lab page
+3. `@laminar-bench approve` works on the simulated bench. On the real arm, the technician approves on the Lab page
    instead, and an ASI:One `approve` is refused.
-4. After about a minute, `@Laminar Bench status` gives the result: measured mL, error against the target, within
+4. After about a minute, `@laminar-bench status` gives the result: measured mL, error against the target, within
    tolerance or not, plus the assistant's summary. `cancel` withdraws a waiting plan.
 
 How it talks to ASI:One: one reply per message, ending the turn, as ASI:One expects. It sends no unprompted
