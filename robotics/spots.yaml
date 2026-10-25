@@ -25,6 +25,6 @@ wells:
 vials:
   vial_A_initial_position: [14.5, 99.2, 28.1, 72.4, -0.8, 2.0]
   vial_B_initial_position: [14.5, 92.3, 33.9, 51.6, -11.4, 0.5]
-  vial_A_final_position: [-34.4, 116.2, 76.8, 48.0, 45.9, -8.2]
+  vial_A_final_position: [-65.5, 119.4, 45.8, 89.1, -63.7, 12.0]
   vial_C_initial_position: [14.7, 95.685, 38.398, 50.2, -19.602, 1.799]
   vial_D_initial_position: [34.841, 104.918, 37.032, 70.504, 19.0, -11.9]

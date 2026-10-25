@@ -250,7 +250,9 @@ def main():
                 t_print, loops = now, 0
                 temps = max(st["temp"] for st in bus.state.values())
                 line = "  ".join(f"J{m}={cmd[m]:6.1f}" for m in ids)
-                print(f"\r{line}  max {temps:.0f}C  {rate:5.0f} Hz ", end="", flush=True)
+                g = bus.state.get(GRIPPER)
+                grip = f"grip leader {goal[GRIPPER]:5.1f} jaws {math.degrees(g['pos']) - zero[GRIPPER]:5.1f}" if g else ""
+                print(f"\r{line}  {grip}  max {temps:.0f}C  {rate:5.0f} Hz ", end="", flush=True)
             time.sleep(max(0.0, dt - (time.perf_counter() - t0)))
         print()
     except KeyboardInterrupt:
