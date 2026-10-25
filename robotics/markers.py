@@ -31,7 +31,7 @@ Commands (degrees for joints, mm in the arm base frame: x forward, y left, z up)
                                             per call (see cmd_calibrate); finish writes the `tray` section of
                                             vision_calib.yaml and prints the error in mm
     python markers.py visit [--run]         arm_server.py running: scan pose -> find the tray -> for each container
-                                            lift, travel, lower to HOVER_MM above its marker, gripper pointing
+                                            lift, travel, lower to HOVER_MM (50 mm) above its marker, gripper pointing
                                             down; Enter before every move. Without --run: plan and print only.
 Joints come from teleop_state.json while teleop.py runs (it writes it at 10 Hz), else straight from the
 encoders with the motors off (the arm moved by hand).
@@ -61,7 +61,7 @@ BENCH_FILE = HERE / "bench.yaml"
 
 MARKERS = {10: 1, 11: 2, 12: 3, 13: 4}      # ArUco id -> container number
 MARKER_MM = 20.0       # side of a marker's black square (measured on the tray)
-HOVER_MM = 100.0       # visit: gripper tip ends this far above the marker
+HOVER_MM = 50.0        # visit: gripper tip ends this far above the marker centre (--hover)
 CARRY_MM = 60.0        # ... and travels between containers this much higher than that
 CAMERA = 2             # wrist camera, DirectShow index (indices shift after re-plugs: --camera)
 TOUCH_MAX_Z_MM = 100.0  # calibrate touch: the tip counts as on the table below this height
@@ -537,7 +537,7 @@ def yaw(deg: float) -> np.ndarray:
 
 
 def plan_visit(q_scan, containers: dict[int, np.ndarray], table_z: float, workspace=None,
-               tilts=TILTS_DEG) -> tuple[list[tuple[int, list]], float]:
+               tilts=TILTS_DEG, hover_mm: float = HOVER_MM) -> tuple[list[tuple[int, list]], float]:
     """([(container, [Path, ...])], tilt used) from the scan pose, with the smallest tilt from `tilts` that plans.
     First container: straight up/down to carry height, then a straight line above its marker during which the
     gripper turns to point down (spread over the long travel so the wrist doesn't flip), then lower to HOVER_MM
@@ -546,14 +546,14 @@ def plan_visit(q_scan, containers: dict[int, np.ndarray], table_z: float, worksp
     err = None
     for tilt in tilts:
         try:
-            return _plan_visit(q_scan, containers, table_z, workspace, tilt), tilt
+            return _plan_visit(q_scan, containers, table_z, workspace, tilt, hover_mm), tilt
         except M.PlanError as e:
             err = e
     raise M.PlanError(f"no tilt in {tilts} works; last: {err}")
 
 
-def _plan_visit(q_scan, containers, table_z, workspace, tilt):
-    hover, carry = table_z + HOVER_MM, table_z + HOVER_MM + CARRY_MM
+def _plan_visit(q_scan, containers, table_z, workspace, tilt, hover_mm=HOVER_MM):
+    hover, carry = table_z + hover_mm, table_z + hover_mm + CARRY_MM
     plans, q = [], dict(q_scan)
     p, R = M.fk_mm(q)
     base0 = math.degrees(math.atan2(p[1], p[0]))
@@ -628,7 +628,7 @@ def cmd_visit(a) -> None:
         print(f"  container {k}: ({xy[0]:.1f}, {xy[1]:.1f}) mm")
 
     try:
-        plans, tilt = plan_visit(q_scan, pose["containers"], calib["table_z_mm"], workspace)
+        plans, tilt = plan_visit(q_scan, pose["containers"], calib["table_z_mm"], workspace, hover_mm=a.hover)
     except M.PlanError as e:
         raise SystemExit(f"NOT MOVING: {e}") from None
     print("gripper pointing straight down" if tilt == 0 else
@@ -653,6 +653,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=CAMERA, help="wrist camera index")
     ap.add_argument("--run", action="store_true", help="visit: move the arm (arm_server.py must be running)")
     ap.add_argument("--image", help="visit without --run: plan from this scan-pose photo")
+    ap.add_argument("--hover", type=float, default=HOVER_MM, help="visit: stop this far above each marker centre, mm")
     ap.add_argument("--dj1", type=float, default=0.0, help="visit --image: the base was turned this much (deg)")
     a = ap.parse_args()
     {"view": cmd_view, "calibrate": cmd_calibrate, "visit": cmd_visit}[a.command](a)
