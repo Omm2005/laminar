@@ -139,30 +139,53 @@ class Watch:
         self.cam.stop()
 
 
-def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record: dict):
-    """deliver.HOOKS["pour"]: the level-model pour into `column`, tilting the vial's top towards the tray."""
+def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record: dict, mode: str = "tip"):
+    """deliver.HOOKS["pour"]: the level-model pour into `column`, tipping the vial's top towards the tray.
+    mode "tip" (default): every joint tips the gripper about a horizontal axis through the gripper tip (pour_tilt.py),
+    the tip locked in place; first the gripper turns in place to the heading from which the tilt goes furthest.
+    mode "roll": wrist roll (J6) only, as before (stops at J6's 90 deg limit)."""
     from laminar import pour_motor6 as P6
+    import motion as M
+    import markers as T
+    import pour_tilt as PT
 
     def pour(client, pose, cont):
         q = client.current_joints()
-        direction = int(D.tilt_sign(q, D.into_tray(pose)))
+        toward = D.into_tray(pose)
         record["before"] = watch.snapshot()
-        print(f"  level-model pour into {column} ({'right' if direction > 0 else 'left'}, J6 "
-              f"{'+' if direction > 0 else '-'}), target {target:.0%} of the box, max tilt {max_tilt:g} deg")
-        joint = P6.ServerTiltJoint(6)
+        cfg = P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt)
+        turn = None
+        if mode == "tip":
+            g, q_start, table = PT.best_pour_start(q, toward)
+            reach = (len(table) - 1) * PT.TILT_STEP_DEG
+            record["tip"] = {"heading_turn_deg": g, "reach_deg": reach}
+            print(f"  all-joint pour into {column}: gripper turned {g:+.0f} deg about vertical first, tilt reaches "
+                  f"{reach:.0f} deg with the tip locked; target {target:.0%} of the box, max tilt "
+                  f"{min(max_tilt, reach):.0f} deg")
+            if g:
+                turn = M.plan_turn(q, M.fk_mm(q_start)[1], label="turn to the pour heading")
+                print("  " + str(client.run(turn).get("result")))
+            joint, direction = PT.TipTiltJoint(client, table), 1
+        else:
+            direction = int(D.tilt_sign(q, toward))
+            print(f"  level-model pour into {column} ({'right' if direction > 0 else 'left'}, J6 "
+                  f"{'+' if direction > 0 else '-'}), target {target:.0%} of the box, max tilt {max_tilt:g} deg")
+            joint = P6.ServerTiltJoint(6)
         try:
-            r = P6._pour(joint, watch.tracker, column, direction, empty=[],
-                         cfg=P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt),
+            r = P6._pour(joint, watch.tracker, column, direction, empty=[], cfg=cfg,
                          log_path=str(watch.out / "pour_guide.jsonl"))
         finally:
-            joint.close()      # the wrist goes back upright
+            joint.close()      # upright again: arm_server takes the arm back to where the stream started
         time.sleep(1.0)
         record["after"] = watch.snapshot()
         record["result"] = {k: v for k, v in r.__dict__.items() if k not in ("log", "guide")}
         print(f"  pour: {r.result} - {r.reason}")
-        # the return plans from the commanded joints: make sure the wrist really is back where it was
+        if turn is not None:   # turn back to the pour pose's heading, the tip still in place
+            q_now = client.current_joints()
+            print("  " + str(client.run(M.plan_turn(q_now, M.fk_mm(q)[1], label="turn back")).get("result")))
+        # the return plans from the commanded joints: make sure the arm really is back where the pour began
         q2 = client.current_joints()
-        if abs(q2[6] - q[6]) > 1.0:
+        if max(abs(q2[j] - q[j]) for j in range(1, 7)) > 1.0:
             client._send({"op": "move", "joints": {str(j): v for j, v in q.items()}, "speed": 15.0})
 
     return pour
@@ -173,7 +196,9 @@ def main() -> None:
     ap.add_argument("job", help="vial 2 container, e.g. A2b")
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
     ap.add_argument("--target", type=float, default=0.9, help="stop at this fraction of the column box")
-    ap.add_argument("--max-tilt", type=float, default=85.0, help="never roll the wrist further than this (deg)")
+    ap.add_argument("--max-tilt", type=float, default=140.0, help="never tip the vial further than this (deg)")
+    ap.add_argument("--pour-mode", choices=["tip", "roll"], default="tip",
+                    help="tip: every joint tips the gripper, tip locked (default); roll: wrist roll J6 only")
     ap.add_argument("--side-cam", type=int, default=2, help="side (level) camera index")
     ap.add_argument("--wrist-cam", type=int, default=1, help="wrist camera index")
     ap.add_argument("--seg-model", default=str(REPO / "sense" / "level_seg.onnx"))
@@ -196,7 +221,7 @@ def main() -> None:
     time.sleep(2.0)
     record: dict = {"job": a.job, "column": column, "target": a.target, "start": watch.snapshot()}
     D.HOOKS["phase"] = watch.set_phase
-    D.HOOKS["pour"] = make_pour(watch, column, a.target, a.max_tilt, record)
+    D.HOOKS["pour"] = make_pour(watch, column, a.target, a.max_tilt, record, a.pour_mode)
     err = None
     try:
         D.main([a.job, "--run", "--camera", str(a.wrist_cam)])

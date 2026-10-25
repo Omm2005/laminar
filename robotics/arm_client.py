@@ -35,6 +35,7 @@ HERE = FilePath(__file__).resolve().parent
 CMD_FILE = HERE / "arm_cmd.json"          # same files arm_server.py uses (it lives in this folder)
 STATUS_FILE = HERE / "arm_status.json"
 TILT_FILE = HERE / "arm_tilt.json"         # live pour-roll offsets for arm_server's tilt_stream op
+POSE_FILE = HERE / "arm_pose.json"         # live J1-J6 targets for arm_server's pose_stream op
 CHUNK_MM = 10.0                            # mode="moves": one move command per this much gripper travel
 PICKUP_TIMEOUT_S = 3.0                     # arm_server must acknowledge a new command within this time
 STATUS_STALE_S = 3.0                       # idle arm_server rewrites its status every 0.5 s; older = not running
@@ -160,6 +161,27 @@ class ArmClient:
     def end_tilt_stream(self) -> dict:
         """Tilt back upright and wait until arm_server has finished the stream."""
         self.set_tilt(0.0, done=True)
+        return {"result": "dry run"} if self.dry_run else self.wait_idle()
+
+    def start_pose_stream(self, max_rate_deg_s: float = 60.0, timeout_s: float = 0.5) -> dict[int, float]:
+        """Hand J1-J6 to set_pose(). Returns the start pose (degrees): where the arm goes back when the stream ends."""
+        base = self.current_joints() if not self.dry_run else {j: 0.0 for j in range(1, 7)}
+        self._pose_seq = 0
+        self._write_atomic(POSE_FILE, {"seq": -1, "joints": {str(j): v for j, v in base.items()}, "done": False})
+        self._send({"op": "pose_stream", "max_rate_deg_s": max_rate_deg_s, "timeout_s": timeout_s}, wait=False)
+        return base
+
+    def set_pose(self, joints: dict[int, float], done: bool = False) -> None:
+        """Live J1-J6 targets (degrees). Call at least every timeout_s."""
+        self._pose_seq = getattr(self, "_pose_seq", 0) + 1
+        if self.dry_run:
+            return
+        self._write_atomic(POSE_FILE, {"seq": self._pose_seq, "joints": {str(j): float(v) for j, v in joints.items()},
+                                       "done": bool(done)})
+
+    def end_pose_stream(self) -> dict:
+        """End the stream (arm_server takes the arm back to the start pose) and wait until it has."""
+        self.set_pose({}, done=True)
         return {"result": "dry run"} if self.dry_run else self.wait_idle()
 
     def run(self, path: Path, mode: str = "path") -> dict:

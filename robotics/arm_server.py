@@ -9,6 +9,9 @@ Command file (write atomically; a new "id" triggers execution). Angles are degre
         # play a pre-planned path continuously (motion.py); refused unless it starts at the current pose
   {"id": 5, "op": "tilt_stream", "joint": 6, "base": deg, "max_rate_deg_s": 120, "timeout_s": 0.5}
         # follow live offsets from arm_tilt.json {"seq", "deg", "done"} (adaptive pour); watchdog tilts back
+  {"id": 7, "op": "pose_stream", "max_rate_deg_s": 60, "timeout_s": 0.5}
+        # follow live J1-J6 targets from arm_pose.json {"seq", "joints": {"1": deg, ...}, "done"} (the all-joint pour
+        # tilt, pour_tilt.py); per-joint rate limit; watchdog or done: back to the pose it started from
   {"id": 6, "op": "rest"}                                               # ease to zero pose, disable, exit
 Status is written to arm_status.json after every command and ~5x per second while busy.
 Creating a file named STOP also returns to rest and exits.
@@ -31,6 +34,7 @@ import arm_trace  # 100 Hz cmd/pos/vel/torque trace for Tiger (trajectory analys
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
 TILT_FILE = HERE / "arm_tilt.json"   # live pour-roll targets for the tilt_stream op
+POSE_FILE = HERE / "arm_pose.json"   # live J1-J6 targets for the pose_stream op
 PATH_START_TOL_DEG = 2.0    # a path must start where the arm is commanded now
 PATH_MAX_JOINT_SPEED = 90.0  # deg/s between consecutive path points; faster = refused
 SMOOTH_MAX_DEV_DEG = 3.0    # every path is smoothed (smooth_path.py) unless that would move it further than this
@@ -321,6 +325,45 @@ def main():
         cmd[joint] = base
         return f"tilt_stream ended ({ended}), J{joint} back at {base:.1f}"
 
+    def pose_stream(max_rate, timeout_s):
+        """Live control of J1-J6 from POSE_FILE: {"seq": n, "joints": {"1": deg, ...}, "done": bool}, each joint
+        rate-limited to max_rate and clamped to its limits (the writer plans a smooth path; this is the safety net).
+        If the writer goes quiet for timeout_s, or says done, every joint returns to where the op started."""
+        arm = [m for m in ids if m != GRIPPER]
+        base = {m: clamp(m, cmd[m]) for m in arm}
+        goal = dict(base)
+        last_seq, last_t = None, time.time()
+        ended = "done"
+        t_status = 0.0
+        while True:
+            try:
+                msg = json.loads(POSE_FILE.read_text())
+            except (ValueError, OSError):
+                msg = None
+            if msg and msg.get("seq") != last_seq:
+                last_seq, last_t = msg.get("seq"), time.time()
+                if msg.get("done"):
+                    break
+                goal = {m: clamp(m, float(msg["joints"].get(str(m), base[m]))) for m in arm}
+            if time.time() - last_t > timeout_s:
+                ended = f"watchdog: no pose update for {timeout_s:.2f}s"
+                break
+            step = max_rate * dt
+            for m in arm:
+                cmd[m] += max(-step, min(step, goal[m] - cmd[m]))
+            tick()
+            if time.time() - t_status > 0.2:
+                t_status = time.time()
+                write_status(busy=True, doing="pose_stream")
+        while max(abs(cmd[m] - base[m]) for m in arm) > 0.05:  # back where it started, same rate limit
+            step = max_rate * dt
+            for m in arm:
+                cmd[m] += max(-step, min(step, base[m] - cmd[m]))
+            tick()
+        for m in arm:
+            cmd[m] = base[m]
+        return f"pose_stream ended ({ended}), back at the start pose"
+
     def gripper_move(target, speed, limit=GRIP_MOVE_TORQUE):
         target = clamp(GRIPPER, target)
         grip["limit"], grip["teleop_hold"] = limit, True
@@ -435,6 +478,8 @@ def main():
                     last["result"] = tilt_stream(j, float(c.get("base", cmd[j])),
                                                  float(c.get("max_rate_deg_s", 120.0)),
                                                  float(c.get("timeout_s", 0.5)))
+                elif op == "pose_stream":
+                    last["result"] = pose_stream(float(c.get("max_rate_deg_s", 60.0)), float(c.get("timeout_s", 0.5)))
                 elif op in ("rest", "stop"):
                     raise KeyboardInterrupt
                 else:
