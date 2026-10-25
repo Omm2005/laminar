@@ -77,6 +77,7 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
+REST_TOL_DEG = 10.0   # a joint further than this from 0 is not at rest
 STARTUP_FEEDBACK_S = 1.0   # right after enabling, a motor's first reply can be late: no lost-feedback stop yet
 # Lost feedback never drops the arm: hold the commanded pose with torque for FEEDBACK_GRACE_S waiting for it to come
 # back, then ease to rest on commands alone (the motors still obey commands when only the replies are lost), and
@@ -93,6 +94,23 @@ def smoothstep(s):
     return s * s * (3 - 2 * s)
 
 
+def boost_process() -> None:
+    """Windows: high priority and no power throttling (EcoQoS) for this process only, so the 100 Hz loop is not
+    parked for hundreds of ms while the laptop saves power."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    proc = k32.GetCurrentProcess()
+    k32.SetPriorityClass(proc, 0x80)  # HIGH_PRIORITY_CLASS
+
+    class Throttle(ctypes.Structure):
+        _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong), ("StateMask", ctypes.c_ulong)]
+    t = Throttle(1, 0x1 | 0x4, 0)  # execution speed + timer resolution throttling: off
+    k32.SetProcessInformation(proc, 4, ctypes.byref(t), ctypes.sizeof(t))  # ProcessPowerThrottling
+    ctypes.windll.winmm.timeBeginPeriod(1)
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -105,6 +123,7 @@ def main():
     ap.add_argument("--idle-min", type=float, default=IDLE_TIMEOUT_S / 60,
                     help="rest and exit after this many minutes with no command (camera calibration can take long)")
     args = ap.parse_args()
+    boost_process()
     zero = load_follower_zero()
     comp = None
     if not args.no_comp and (HERE / "compensation.json").exists():
@@ -167,14 +186,27 @@ def main():
     reenabled: dict[int, float] = {}
     startup = {"until": 0.0}   # time.time() until which a missing/late first reply is not yet "lost feedback"
 
+    last_check = {"t": 0.0}
+
     def check():
         if resting["now"]:  # going to rest is the safe outcome of every fault: let it finish
             return
         now = time.time()
+        # this loop itself sometimes freezes for 0.25-1.2 s (Windows scheduling): replies that arrived meanwhile
+        # are only read now, so stale motor timestamps then mean "we were asleep", not "the motor went quiet".
+        # Give the motors a fresh FEEDBACK_TIMEOUT window instead of stopping; a real dropout still trips after it.
+        gap = now - last_check["t"] if last_check["t"] else 0.0
+        last_check["t"] = now
+        if gap > FEEDBACK_TIMEOUT:
+            startup["until"] = max(startup["until"], now + FEEDBACK_TIMEOUT)
+            print(f"control loop paused {gap:.2f} s: waiting for fresh motor replies", flush=True)
         for mid in ids:
             st = bus.state.get(mid)
             if (st is None or now - st["t"] > FEEDBACK_TIMEOUT) and now > startup["until"]:
-                raise RuntimeError(f"lost feedback from J{mid}")
+                ages = " ".join(f"J{m}={now - bus.state[m]['t']:.2f}s" if m in bus.state else f"J{m}=never"
+                                for m in ids)
+                raise RuntimeError(f"lost feedback from J{mid} (reply ages {ages}; usb read errors {bus.rx_errors}"
+                                   f" {bus.last_rx_error or ''})")
             if st is None:
                 continue
             if st["fault"]:
@@ -509,13 +541,28 @@ def main():
         if args.hold_grip:
             grip["target"] -= GRASP_SQUEEZE_DEG
             grip["limit"] = args.hold_torque
-        for mid in ids:
-            bus.disable(mid)
-            bus.write_param_u8(mid, P_RUN_MODE, 0)
-        time.sleep(0.05)
+        away = {m: round(cmd[m], 1) for m in cmd if abs(cmd[m]) > REST_TOL_DEG}
+        if not away:
+            for mid in ids:
+                bus.disable(mid)
+                bus.write_param_u8(mid, P_RUN_MODE, 0)
+            time.sleep(0.05)
+        else:
+            # 2026-10-25: a restart with the arm up at the scan pose disabled every motor for this mode reset; the
+            # arm fell ~25 deg in that gap, the re-enabled motors yanked back at full torque (J4 overcurrent), the
+            # supply cut out and the arm fell to the table. Away from rest: never go limp, just (re-)enable in place.
+            print(f"arm is not at rest {away}: enabling in place (no limp mode reset)", flush=True)
+        t_en = time.time()
         for mid in ids:
             bus.enable(mid)
         enabled = True
+        # start from where each joint is NOW (the enable replies carry it), not from the read above: if anything
+        # moved in between, commanding the old pose would snap the arm back at full torque
+        while time.time() - t_en < 0.15 and not all(bus.state.get(m, {}).get("t", 0.0) >= t_en for m in cmd):
+            time.sleep(0.002)
+        for mid in cmd:
+            if bus.state.get(mid, {}).get("t", 0.0) >= t_en:
+                cmd[mid] = rel(mid)
         startup["until"] = time.time() + STARTUP_FEEDBACK_S
         hold(0.5)
         idle = [m for m in ids if bus.state.get(m, {}).get("mode") not in (None, RUN_MODE)]
@@ -616,7 +663,15 @@ def main():
                               flush=True)
                 move(dict.fromkeys(cmd, 0.0), 15.0 if feedback_fresh() else BLIND_REST_SPEED, "return to rest")
                 hold(0.5)
-                at_rest = True
+                # check the arm really is at rest before disabling: on 2026-10-25 every motor had lost power, the
+                # "return to rest" commanded nothing and this still said "at rest, motors disabled"
+                off = {m: round(rel(m), 1) for m in cmd if m in bus.state and abs(rel(m)) > REST_TOL_DEG}
+                dead = [m for m in ids if bus.state.get(m, {}).get("mode") != RUN_MODE]
+                if feedback_fresh() and not off and not dead:
+                    at_rest = True
+                else:
+                    print(f"rest NOT reached: off by {off} deg, motors not running {dead}, "
+                          f"feedback {'ok' if feedback_fresh() else 'missing'}", flush=True)
         except BaseException as e:
             print(f"return to rest aborted: {e!r}", flush=True)
         if enabled and not at_rest:
