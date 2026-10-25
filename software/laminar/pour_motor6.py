@@ -420,7 +420,9 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     wrong = wrong_side = None
     rises = {k: tracker.read(k).ml - start_ml[k] for k in tracker.columns if k != column}
     if result != "done" and rises and ("instead" in reason or "should be empty" in reason):
-        wrong = max(rises, key=rises.get)
+        import re
+        named = re.search(r"column (\S+) (is filling|should be empty)", reason)   # the column that set off the alarm
+        wrong = named.group(1) if named and named.group(1) in tracker.columns else max(rises, key=rises.get)
         wrong_side = "right" if tracker.columns[wrong].roi[0] > col.roi[0] else "left"
         reason += f" - liquid is going to the {wrong_side.upper()} of {column} (into {wrong})"
 

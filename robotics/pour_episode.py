@@ -204,6 +204,18 @@ def dry_tilt(joint, direction: int, max_tilt: float, watch: "Watch"):
     return SimpleNamespace(ok=True, result="dry", reason=f"tilted to {reach:.0f} deg and back", max_tilt_deg=reach)
 
 
+AIM_RETRIES = 2   # the stream went into a neighbour channel: move one channel the other way and pour on, this often
+
+
+def channel_pitch_mm() -> float:
+    """One reservoir channel along the tray, from the marker layout: containers are 3 channels apart."""
+    import numpy as np
+    lay = T.load_calib()["layout_mm"]
+    ids = sorted(lay)
+    gaps = [float(np.linalg.norm(np.asarray(lay[b]) - np.asarray(lay[a]))) for a, b in zip(ids, ids[1:])]
+    return sum(gaps) / len(gaps) / 3.0
+
+
 def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record: dict, mode: str = "tip",
               dry: bool = False):
     """deliver.HOOKS["pour"]: the level-model pour into `column`, tipping the vial's top towards the tray.
@@ -211,28 +223,26 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
     the tip locked in place; first the gripper turns in place to the heading from which the tilt goes furthest.
     mode "roll": wrist roll (J6) only, as before (stops at J6's 90 deg limit).
     dry: no vision control: tilt straight to max_tilt (or as far as the arm goes) at DRY_TILT_DEG_S, hold, back
-    upright: checks the motion with an empty vial."""
+    upright: checks the motion with an empty vial.
+    Aim correction: the pour point comes from the container's marker, and the camera's estimate of where the marker
+    is can be a channel off depending on where the tray is. When the level camera sees the stream going into a
+    neighbour channel (LEFT / RIGHT of the target), the pour tips back, the gripper moves one channel the other way
+    ALONG THE TRAY LINE (marker frame), and the pour goes on to the same target; AIM_RETRIES times at most."""
     from laminar import pour_motor6 as P6
     import motion as M
-    import markers as T
     import pour_tilt as PT
 
-    def pour(client, pose, cont):
-        q = client.current_joints()
-        toward = D.into_tray(pose)
-        record["before"] = watch.snapshot()
-        want = target() if callable(target) else target     # e.g. "+50 %" is measured right now, before the pour
-        # om/pour-fixes made the wrong-column alarm 0.2 mL for 0.2 s; on this rig an empty watched column at the edge
-        # of the side view reads 0.6-2 mL of noise (people / glare), which aborted real pours. Keep PourGuide's own
-        # 0.3 mL for 0.5 s, raised to 0.5 mL: a real stream into the wrong column passes that in well under a second
-        # only the 2 channels each side of the target are watched (x1, at the far edge, read noise and aborted)
+    def pour_once(client, q, toward, want):
+        """One tilt-and-pour from joints q; returns (result, the turn path or None). Leaves the arm back at q."""
         cfg = P6.PourConfig(target_frac=want, max_tilt_deg=max_tilt, wrong_column_ml=0.5, wrong_column_s=0.5,
                             watch_near=2)
+        # (om/pour-fixes made the wrong-column alarm 0.2 mL for 0.2 s; an empty edge column of the side view reads
+        # 0.6-2 mL of noise, so 0.5 mL for 0.5 s, and only the 2 channels each side of the target are watched)
         turn = None
         if mode == "tip":
             g, q_start, table = PT.best_pour_start(q, toward)
             reach = (len(table) - 1) * PT.TILT_STEP_DEG
-            record["tip"] = {"heading_turn_deg": g, "reach_deg": reach}
+            record.setdefault("tip", []).append({"heading_turn_deg": g, "reach_deg": reach})
             print(f"  all-joint pour into {column}: gripper turned {g:+.0f} deg about vertical first, tilt reaches "
                   f"{reach:.0f} deg with the tip locked; target {want:.0%} of the box, max tilt "
                   f"{min(max_tilt, reach):.0f} deg")
@@ -253,17 +263,54 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
                              log_path=str(watch.out / "pour_guide.jsonl"))
         finally:
             joint.close()      # upright again: arm_server takes the arm back to where the stream started
-        time.sleep(1.0)
-        record["after"] = watch.snapshot()
-        record["result"] = {k: v for k, v in r.__dict__.items() if k not in ("log", "guide")}
-        print(f"  pour: {r.result} - {r.reason}")
         if turn is not None:   # turn back to the pour pose's heading, the tip still in place
             q_now = client.current_joints()
             print("  " + str(client.run(M.plan_turn(q_now, M.fk_mm(q)[1], label="turn back")).get("result")))
-        # the return plans from the commanded joints: make sure the arm really is back where the pour began
         q2 = client.current_joints()
         if max(abs(q2[j] - q[j]) for j in range(1, 7)) > 1.0:
             client._send({"op": "move", "joints": {str(j): v for j, v in q.items()}, "speed": 15.0})
+        return r
+
+    def pour(client, pose, cont):
+        import numpy as np
+        q0 = client.current_joints()
+        toward = D.into_tray(pose)
+        record["before"] = watch.snapshot()
+        want = target() if callable(target) else target     # e.g. "+50 %" is measured right now, before the pour
+        along = T.rot(float(pose["heading_deg"])) @ np.array([1.0, 0.0])   # tray line, marker 10 -> 13 (a -> d)
+        pitch = channel_pitch_mm()
+        q, shifted, attempts = q0, 0.0, []
+        for k in range(AIM_RETRIES + 1):
+            r = pour_once(client, q, toward, want)
+            time.sleep(1.0)
+            attempts.append({"shift_mm": round(shifted, 1), **{a: getattr(r, a, None)
+                                                              for a in ("result", "reason", "wrong_side")}})
+            print(f"  pour: {r.result} - {r.reason}")
+            side = getattr(r, "wrong_side", None)
+            if dry or r.result != "aborted" or side not in ("left", "right") or k == AIM_RETRIES:
+                break
+            # LEFT of the target = towards a (-x along the tray): move the other way, one channel
+            step = pitch if side == "left" else -pitch
+            shifted += step
+            p, _ = M.fk_mm(q)
+            goal = p + np.array([along[0] * step, along[1] * step, 0.0])
+            print(f"  aim: the stream went {side.upper()} of {column}: moving the pour point {abs(step):.1f} mm "
+                  f"{'towards d' if step > 0 else 'towards a'} along the tray and pouring on")
+            mv = M.plan_line(q, goal, None, speed_mm_s=10.0, label="aim one channel over")
+            print("  " + str(client.run(mv).get("result")))
+            q = client.current_joints()
+        record["after"] = watch.snapshot()
+        record["result"] = {k: v for k, v in r.__dict__.items() if k not in ("log", "guide")}
+        record["aim"] = {"attempts": attempts, "shift_along_tray_mm": round(shifted, 1)}
+        if shifted:
+            print(f"  aim correction used this run: {shifted:+.1f} mm along the tray from container "
+                  f"{'abcd'[cont - 1]}'s marker offset")
+            back = M.plan_line(client.current_joints(), M.fk_mm(q0)[0], None, speed_mm_s=10.0, label="aim back")
+            print("  " + str(client.run(back).get("result")))
+        # the return plans from the commanded joints: make sure the arm really is back where the pour began
+        q2 = client.current_joints()
+        if max(abs(q2[j] - q0[j]) for j in range(1, 7)) > 1.0:
+            client._send({"op": "move", "joints": {str(j): v for j, v in q0.items()}, "speed": 15.0})
 
     return pour
 
