@@ -29,6 +29,10 @@ Set these on the Convex deployment (`npx convex env set NAME value`), never in t
 
 ## Convex
 
+**Runs go to the real arm.** Every approved run waits at `/bench/next` (`EXECUTOR = "bench"` in `convex/runs.ts`; set
+it to `"sim"` for the simulated bench). On the bench laptop, `python robotics/bench_runner.py` takes it, runs each pour
+with `pour_episode.py`, and reports the measured mL back. It asks for Enter at the bench before each run.
+
 | Feature | Where |
 | --- | --- |
 | Live queries | Every console tab uses `useQuery`. The landing page subscribes with `ConvexClient.onUpdate` to `site.liveArm`, `site.liveStats` and `robot.liveFrame`: camera JPEGs are pushed as bytes over the websocket, one document per camera overwritten in place. |

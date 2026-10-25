@@ -5,7 +5,7 @@
  */
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
-import { createRun } from "./runs";
+import { EXECUTOR, createRun } from "./runs";
 
 const WELL_CHANNEL: Record<number, number> = { 1: 1, 2: 4, 3: 7, 4: 10 };
 const LIQUID: Record<string, string> = { A: "red", B: "blue", C: "yellow", D: "green" };
@@ -89,7 +89,7 @@ export const submit = internalMutation({
       const well = Object.entries(WELL_CHANNEL).find(([, ch]) => ch === +c)?.[0];
       return well ? `well ${well}` : m;
     });
-    const id = await createRun(ctx, text, a.requestedBy || "Mana console", "sim", "mana", true);
+    const id = await createRun(ctx, text, a.requestedBy || "Mana console", EXECUTOR, "mana", true);
     return { jobId: id, status: "planning" };
   },
 });

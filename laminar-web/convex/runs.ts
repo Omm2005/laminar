@@ -8,6 +8,10 @@ import { workflow } from "./exec";
 import { limiter } from "./limits";
 import type { WorkflowId } from "@convex-dev/workflow";
 
+/** Where approved runs go. "bench" = the real arm: robotics/bench_runner.py on the bench laptop takes them from
+ *  /bench/next and reports back (/bench/update). "sim" = the simulated bench (exec.ts). */
+export const EXECUTOR = "bench" as const;
+
 export async function log(ctx: MutationCtx, actor: string, action: string, detail: string, runId?: Id<"runs">) {
   await ctx.db.insert("audit", { t: Date.now(), actor, action, detail, runId });
   await ctx.scheduler.runAfter(0, internal.tiger.ingestEvent, { t: Date.now(), runId: runId ?? null, actor, action, detail });
@@ -46,7 +50,7 @@ export const getInternal = internalQuery({
 
 /** A spoken or typed request becomes a run in `checking`; the planner action takes it from there. */
 export type Via = "web" | "voice" | "mana" | "protocol";
-export async function createRun(ctx: MutationCtx, requestText: string, requestedBy: string, executor: "sim" | "bench" = "sim", via: Via = "web", structured = false) {
+export async function createRun(ctx: MutationCtx, requestText: string, requestedBy: string, executor: "sim" | "bench" = EXECUTOR, via: Via = "web", structured = false) {
   const who = name(requestedBy);
   await limiter.limit(ctx, via === "mana" ? "mana" : "submit", { key: via === "mana" ? undefined : who.toLowerCase(), throws: true });
   const request = requestText.trim().slice(0, 500);
@@ -60,7 +64,7 @@ export async function createRun(ctx: MutationCtx, requestText: string, requested
 
 export const submit = mutation({
   args: { request: v.string(), requestedBy: v.string(), executor: v.optional(v.union(v.literal("sim"), v.literal("bench"))), via: v.optional(v.union(v.literal("web"), v.literal("voice"))) },
-  handler: async (ctx, args) => createRun(ctx, args.request, args.requestedBy, args.executor ?? "sim", args.via ?? "web"),
+  handler: async (ctx, args) => createRun(ctx, args.request, args.requestedBy, args.executor ?? EXECUTOR, args.via ?? "web"),
 });
 
 /** Planner output lands here. The checker, not the model, decides whether it can be read back. */
@@ -105,6 +109,7 @@ export async function approveRun(ctx: MutationCtx, id: Id<"runs">, by: string) {
   await ctx.db.patch(id, { status: "approved", approvedBy: who });
   await log(ctx, who, "approve", `Approved ${run.moves?.length ?? 0} moves.`, id);
   if (run.executor === "sim") await ctx.scheduler.runAfter(0, internal.runs.startNext, {});
+  else await log(ctx, "bench", "queued", "Sent to the real arm: the bench laptop (bench_runner.py) picks it up.", id);
   return { ok: true as const, errors: [] };
 }
 
@@ -170,7 +175,7 @@ export const proposeFromChat = internalMutation({
     const who = name(a.requestedBy);
     const moves = expand(tasks);
     const id = await ctx.db.insert("runs", {
-      request: a.request.trim().slice(0, 500) || a.note, requestedBy: who, status: "awaiting_approval", executor: "sim",
+      request: a.request.trim().slice(0, 500) || a.note, requestedBy: who, status: "awaiting_approval", executor: EXECUTOR,
       planner: a.planner, plannerNote: a.note, tasks, moves, errors: [], via: "chat", threadId: a.threadId, createdAt: Date.now(),
     });
     await log(ctx, who, "submit", `${a.request.trim().slice(0, 300)} (via assistant chat)`, id);
@@ -231,6 +236,20 @@ export const benchUpdate = internalMutation({
       const t = Date.now(), err = r2(a.pour.pouredMl - a.pour.targetMl);
       await ctx.db.insert("pours", { runId: a.id, ...a.pour, errorMl: err, source: "bench", t });
       await ctx.scheduler.runAfter(0, internal.tiger.ingestPour, { t, runId: a.id, ...a.pour, errorMl: err, source: "bench" });
+      // the bench state follows the measured pour, as with the simulated bench
+      const poured = Math.max(0, a.pour.pouredMl);
+      const tubeRow = await ctx.db.query("tubes").filter((q) => q.eq(q.field("letter"), a.pour!.tube)).first();
+      if (tubeRow) await ctx.db.patch(tubeRow._id, { volumeMl: r2(Math.max(0, tubeRow.volumeMl - poured)), updatedAt: t });
+      const w = await ctx.db.query("wells").withIndex("by_number", (q) => q.eq("number", a.pour!.well)).first();
+      if (w) {
+        const contents = [...w.contents];
+        const c = contents.find((x) => x.tube === a.pour!.tube);
+        if (c) c.ml = r2(c.ml + poured); else contents.push({ tube: a.pour.tube, ml: poured });
+        await ctx.db.patch(w._id, { volumeMl: r2(w.volumeMl + poured), contents, updatedAt: t });
+      }
+      if (Math.abs(err) > 0.1 * a.pour.targetMl) {
+        await log(ctx, "bench", "warn", `Pour into well ${a.pour.well} added ${poured.toFixed(2)} mL instead of ${a.pour.targetMl.toFixed(2)} mL.`, a.id);
+      }
     }
     const patch: Record<string, unknown> = {};
     if (a.step !== undefined) patch.step = a.step;
@@ -239,8 +258,18 @@ export const benchUpdate = internalMutation({
       if (a.status === "running") patch.startedAt = Date.now();
       else patch.finishedAt = Date.now();
       if (a.reason) patch.abortReason = a.reason;
+      if (a.status !== "running") {                       // the result line, from the measured pours
+        const pours = await ctx.db.query("pours").withIndex("by_runId", (q) => q.eq("runId", a.id)).collect();
+        const off = pours.filter((p) => Math.abs(p.errorMl) > 0.1 * p.targetMl);
+        patch.result = [
+          a.status === "aborted" ? `Stopped: ${a.reason ?? "the bench aborted the run"}.` : "",
+          `${pours.length} pour${pours.length === 1 ? "" : "s"} on the real arm, ${pours.length - off.length} within ±10% of target.`,
+          off.length ? `Check ${off.map((p) => `well ${p.well} (${p.pouredMl.toFixed(2)} of ${p.targetMl.toFixed(2)} mL)`).join(", ")}.` : "",
+        ].filter(Boolean).join(" ");
+      }
       await log(ctx, "bench", a.status, a.reason ?? `Bench reports ${a.status}.`, a.id);
     }
     await ctx.db.patch(a.id, patch);
+    if (a.status === "done" || a.status === "aborted") await ctx.scheduler.runAfter(0, internal.planner.reflect, { id: a.id });
   },
 });

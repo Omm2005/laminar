@@ -4,7 +4,7 @@ import { mutation, query } from "./_generated/server";
 
 import { TUBE } from "./schema";
 import { check, expand, type Task } from "./lib";
-import { log } from "./runs";
+import { EXECUTOR, log } from "./runs";
 import { limiter } from "./limits";
 
 const ROW = v.object({ tube: TUBE, well: v.number(), ml: v.number() });
@@ -68,7 +68,7 @@ export const toRun = mutation({
     const tasks = toTasks(p.rows);
     const errors = check(tasks, await ctx.db.query("tubes").collect(), await ctx.db.query("wells").collect());
     const runId = await ctx.db.insert("runs", {
-      request: `Protocol “${p.name}” v${p.version}`, requestedBy: who, executor: "sim", createdAt: Date.now(),
+      request: `Protocol “${p.name}” v${p.version}`, requestedBy: who, executor: EXECUTOR, createdAt: Date.now(),
       planner: "protocol", plannerNote: describe(tasks), tasks, moves: expand(tasks), errors, protocolId: id, via: "protocol",
       status: errors.length ? "rejected" : "awaiting_approval",
     });
