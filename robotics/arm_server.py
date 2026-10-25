@@ -47,6 +47,8 @@ PATH_START_TOL_DEG = 2.0    # a path must start where the arm is commanded now
 PATH_MAX_JOINT_SPEED = 90.0  # deg/s between consecutive path points; faster = refused
 SMOOTH_MAX_DEV_DEG = 3.0    # every path is smoothed (smooth_path.py) unless that would move it further than this
 STOP_FILE = HERE / "STOP"
+RUN_MODE = 2             # RobStride feedback mode field: 0 reset, 1 calibration, 2 running
+REENABLE_EVERY_S = 1.0   # a motor found out of run mode is re-enabled at most this often
 GRIPPER = 7
 HZ = 100.0
 GRIP_KP = 12.0           # N.m/rad, impedance gain on the gripper
@@ -161,6 +163,8 @@ def main():
         now = time.time()
         return all(mid in bus.state and now - bus.state[mid]["t"] <= FEEDBACK_TIMEOUT for mid in ids)
 
+    reenabled: dict[int, float] = {}
+
     def check():
         if resting["now"]:  # going to rest is the safe outcome of every fault: let it finish
             return
@@ -173,6 +177,12 @@ def main():
                 raise RuntimeError(f"J{mid} fault 0x{st['fault']:02x}")
             if st["temp"] > TEMP_LIMIT_C:
                 raise RuntimeError(f"J{mid} temperature {st['temp']:.0f} C")
+            # a motor that drops out of run mode still answers but applies no torque: the gripper did this and
+            # every grab ran with limp jaws (2026-10-25). Re-enable it, as teleop.py does, and say so.
+            if enabled and st.get("mode") is not None and st.get("mode") != RUN_MODE                     and now - reenabled.get(mid, 0.0) > REENABLE_EVERY_S:
+                reenabled[mid] = now
+                bus.enable(mid)
+                print(f"J{mid} was in mode {st.get('mode')}, not running: re-enabled", flush=True)
         if STOP_FILE.exists():
             raise KeyboardInterrupt
 
@@ -502,6 +512,16 @@ def main():
             bus.enable(mid)
         enabled = True
         hold(0.5)
+        idle = [m for m in ids if bus.state.get(m, {}).get("mode") not in (None, RUN_MODE)]
+        for _ in range(3):           # make sure every motor (the gripper too) really is running before any command
+            if not idle:
+                break
+            for m in idle:
+                bus.enable(m)
+            hold(0.3)
+            idle = [m for m in ids if bus.state.get(m, {}).get("mode") not in (None, RUN_MODE)]
+        if idle:
+            raise RuntimeError(f"motors not in run mode after enabling: {idle}")
         last["result"] = "ready, holding"
         write_status()
         print("arm_server ready", flush=True)
