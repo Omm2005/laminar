@@ -262,6 +262,7 @@ async def relay(ctx: Context):
 async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
     await ctx.send(sender, ChatAcknowledgement(timestamp=datetime.now(timezone.utc), acknowledged_msg_id=msg.msg_id))
     text = " ".join(c.text for c in msg.content if isinstance(c, TextContent)).strip()
+    text = re.sub(r"^(\s*@\S+[,:]?\s*)+", "", text).strip()          # ASI:One prefixes "@agent1q... "
     meta = {}
     for c in msg.content:
         if isinstance(c, MetadataContent):
