@@ -172,7 +172,7 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
           {check && (check.errors.length === 0
             ? <div className="row" style={{ marginTop: 10, gap: 10 }}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--jade)" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 12l5 5 10-11" /></svg>
-                <span>Every rule passes: rack order, tube volumes, pour limits, well capacity, control well, sample first.</span>
+                <span>Every rule passes: rack order, pour limits, control well, sample first. (Tube and well volumes are bookkeeping: the camera checks the real levels.)</span>
               </div>
             : <div className="notice bad" style={{ marginTop: 10 }}><ul>{check.errors.map((e) => <li key={e}>{e}</li>)}</ul></div>)}
           <div className="between" style={{ marginTop: 14 }}>

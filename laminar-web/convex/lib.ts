@@ -40,6 +40,12 @@ export function describe(tasks: Task[]) {
   return tasks.map((t) => `tube ${t.tube} ${t.pours.map((p) => `${p.ml} mL into well ${p.well}`).join(", ")}`).join("; ") + ".";
 }
 
+/** false: the checker ignores the TRACKED tube and well volumes (the "Right now" numbers). They are bookkeeping only:
+ *  they don't know when a vial is refilled or the tray emptied, and on the real arm the side camera measures the real
+ *  levels during each pour (pour_episode stops at the target and never fills past full). true: refuse a plan that
+ *  needs more than a tube's tracked volume or would overfill a well's tracked volume (the simulated bench). */
+export const CHECK_TRACKED_VOLUMES = false;
+
 /** Checker rules, in code. Returns a list of human-readable errors; empty means the plan may be read back. */
 export function check(tasks: Task[], tubes: Doc<"tubes">[], wells: Doc<"wells">[]): string[] {
   const errors: string[] = [];
@@ -63,7 +69,7 @@ export function check(tasks: Task[], tubes: Doc<"tubes">[], wells: Doc<"wells">[
     if (t.tube === "A" && t.pours.length > MAX_A_ALIQUOTS) errors.push(`Tube A can only be split into ${MAX_A_ALIQUOTS} aliquots per fill; the plan has ${t.pours.length}.`);
     const tube = tubes.find((x) => x.letter === t.tube);
     const need = t.pours.reduce((s, p) => s + p.ml, 0);
-    if (tube && need > tube.volumeMl + 1e-9) errors.push(`Tube ${t.tube} holds ${tube.volumeMl.toFixed(1)} mL but the plan pours ${need.toFixed(1)} mL. Refill it to the line.`);
+    if (CHECK_TRACKED_VOLUMES && tube && need > tube.volumeMl + 1e-9) errors.push(`Tube ${t.tube} holds ${tube.volumeMl.toFixed(1)} mL but the plan pours ${need.toFixed(1)} mL. Refill it to the line.`);
     for (const p of t.pours) {
       if (!WELLS.includes(p.well)) errors.push(`Well ${p.well} doesn't exist. Wells are 1 to 4.`);
       if (!(p.ml >= MIN_POUR_ML && p.ml <= MAX_POUR_ML)) errors.push(`${p.ml} mL into well ${p.well} is outside the ${MIN_POUR_ML}–${MAX_POUR_ML} mL a single pour can do.`);
@@ -74,7 +80,7 @@ export function check(tasks: Task[], tubes: Doc<"tubes">[], wells: Doc<"wells">[
   for (const [well, ml] of added) {
     const w = wells.find((x) => x.number === well);
     const now = w?.volumeMl ?? 0;
-    if (now + ml > WELL_CAPACITY_ML + 1e-9) errors.push(`Well ${well} would hold ${(now + ml).toFixed(1)} mL; it fits ${WELL_CAPACITY_ML.toFixed(1)} mL. Empty the tray or pour less.`);
+    if (CHECK_TRACKED_VOLUMES && now + ml > WELL_CAPACITY_ML + 1e-9) errors.push(`Well ${well} would hold ${(now + ml).toFixed(1)} mL; it fits ${WELL_CAPACITY_ML.toFixed(1)} mL. Empty the tray or pour less.`);
   }
   // Order: sample A must go into a well before a reagent does, so reagents land on sample.
   const aIdx = tasks.findIndex((t) => t.tube === "A");
