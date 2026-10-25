@@ -185,7 +185,9 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
         # om/pour-fixes made the wrong-column alarm 0.2 mL for 0.2 s; on this rig an empty watched column at the edge
         # of the side view reads 0.6-2 mL of noise (people / glare), which aborted real pours. Keep PourGuide's own
         # 0.3 mL for 0.5 s, raised to 0.5 mL: a real stream into the wrong column passes that in well under a second
-        cfg = P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt, wrong_column_ml=0.5, wrong_column_s=0.5)
+        # only the 2 channels each side of the target are watched (x1, at the far edge, read noise and aborted)
+        cfg = P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt, wrong_column_ml=0.5, wrong_column_s=0.5,
+                            watch_near=2)
         turn = None
         if mode == "tip":
             g, q_start, table = PT.best_pour_start(q, toward)

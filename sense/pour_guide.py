@@ -78,13 +78,18 @@ class PourCommand:
     col: str = ""       # column being poured into ("" while still detecting)
 
 
+FAST_WRONG_FACTOR = 3.0   # a neighbour rising this many x wrong_column_ml ...
+FAST_WRONG_CONF = 0.3     # ... counts even at this (lower) confidence ...
+FAST_WRONG_S = 0.1        # ... after only this long: a stream going astray empties a vial in ~1 s
+
+
 class PourGuide:
     def __init__(self, tracker, column: str, target_frac: float = 0.9,
                  steps=DEFAULT_STEPS, min_speed: float = 0.05, lag_s: float = 0.3,
                  no_rise_s: float = 2.0, overflow_margin: float = 0.05,
                  wrong_column_ml: float = 0.3, wrong_column_s: float = 0.5,
                  empty=(), detect_px: float = 5.0, detect_s: float = 0.3,
-                 log_path: str | None = None):
+                 log_path: str | None = None, watch_near: int | None = None):
         if not 0.1 <= target_frac <= 1.0:
             raise ValueError("target_frac must be between 0.1 and 1.0")
         self.tr = tracker
@@ -100,6 +105,8 @@ class PourGuide:
         self.no_rise_s, self.overflow_margin = no_rise_s, overflow_margin
         self.wrong_column_ml, self.wrong_column_s = wrong_column_ml, wrong_column_s
         self.empty = set(empty)        # columns that must hold no liquid at all
+        self.watch_near = watch_near   # only watch this many columns on each side of the target (None = all):
+                                       # a stream can't land 4 channels away, but an edge column can read noise
         self.log_path = log_path
         self._log = None
         self._hist = collections.deque(maxlen=60)
@@ -185,6 +192,26 @@ class PourGuide:
         if detect_abort:
             return out(0.0, "abort", abort=True, reason=detect_abort)
 
+        # 0. liquid going into another column. Checked FIRST, before the target's own confidence: when the vial
+        # dumps, the vial and the stream hide the target column (its confidence drops, step 1 returns "hold"),
+        # and the old order never got here while a neighbour filled 0 -> 4 mL (2026-10-25). A column counts as
+        # filling if it reads high with good confidence for wrong_column_s (a person behind it or an exposure
+        # change can flicker one column for a few frames), or rises a lot (FAST_WRONG_FACTOR x the threshold)
+        # even at lower confidence (a column filling fast reads at ~0.4) for FAST_WRONG_S.
+        for k, ml0 in self._others0.items():
+            o = others[k]
+            rise = o.ml - ml0
+            fast = o.conf >= FAST_WRONG_CONF and rise > FAST_WRONG_FACTOR * self.wrong_column_ml
+            if (o.conf >= 0.5 and rise > self.wrong_column_ml) or fast:
+                since = self._wrong_since.setdefault(k, now)
+                if now - since >= (FAST_WRONG_S if fast else self.wrong_column_s):
+                    what = ("should be empty but has liquid" if k in self.empty
+                            else "is filling instead")
+                    return out(0.0, "abort", abort=True,
+                               reason=f"column {k} {what} (+{rise:.2f} mL)")
+            else:
+                self._wrong_since.pop(k, None)
+
         # 1. can we trust the camera?
         if s.conf < 0.5:
             self._low_conf_since = self._low_conf_since or now
@@ -193,23 +220,9 @@ class PourGuide:
             return out(0.0, "hold", reason="low confidence, holding")
         self._low_conf_since = None
 
-        # 2. safety checks
+        # 2. safety checks (the wrong column is step 0)
         if fill > 1.0 + self.overflow_margin:
             return out(0.0, "abort", abort=True, reason=f"overflow: {fill:.0%} of target")
-        # another column counts as filling only if it reads high, with good confidence,
-        # for wrong_column_s in a row (a person moving behind it or an exposure change
-        # can flicker one column for a few frames)
-        for k, ml0 in self._others0.items():
-            o = others[k]
-            if o.conf >= 0.5 and o.ml - ml0 > self.wrong_column_ml:
-                since = self._wrong_since.setdefault(k, now)
-                if now - since >= self.wrong_column_s:
-                    what = ("should be empty but has liquid" if k in self.empty
-                            else "is filling instead")
-                    return out(0.0, "abort", abort=True,
-                               reason=f"column {k} {what} (+{o.ml - ml0:.2f} mL)")
-            else:
-                self._wrong_since.pop(k, None)
         if rate > 0.01:
             self._last_rise_t = now
         if (self.no_rise_s and now - self._last_rise_t > self.no_rise_s
@@ -268,8 +281,13 @@ class PourGuide:
         self._set_column(name)
         self._start_fill = self._px0.get(name, self.tr.read(name).px) / self.target_px
         self._hist.clear()
+        near = None
+        if self.watch_near is not None:
+            order = sorted(self.tr.columns, key=lambda k: self.tr.columns[k].roi[0])   # left to right = channels
+            i = order.index(name)
+            near = set(order[max(0, i - self.watch_near):i + self.watch_near + 1])
         self._others0 = {k: 0.0 if k in self.empty else self._ml0.get(k, 0.0)
-                         for k in self.tr.columns if k != name}
+                         for k in self.tr.columns if k != name and (near is None or k in near or k in self.empty)}
 
     def _detect(self, now: float) -> tuple[str | None, str]:
         """(column, "") once one non-empty column has risen steadily, (None, reason) if

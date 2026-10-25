@@ -95,6 +95,7 @@ class PourConfig:
     abort_back_deg_s: float = 120.0  # tilt back this fast when a pour is stopped (wrong column, overflow, STOP)
     wrong_column_ml: float = 0.2    # a watched column rising by this much for wrong_column_s = liquid going astray
     wrong_column_s: float = 0.2
+    watch_near: int | None = None   # watch only this many columns each side of the target for liquid going astray
     timeout_s: float = 60.0
     hz: float = 30.0
     overflow_margin: float = 0.05   # final fill above target + this = overfilled
@@ -282,7 +283,8 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     # the median level and the smoothed rate (its own 0.3 s rate on noisy readings stopped pours far too early)
     guide = PourGuide(tracker, column, target_frac=cfg.target_frac, lag_s=0.0,
                       no_rise_s=0, empty=empty, log_path=log_path,
-                      wrong_column_ml=cfg.wrong_column_ml, wrong_column_s=cfg.wrong_column_s)
+                      wrong_column_ml=cfg.wrong_column_ml, wrong_column_s=cfg.wrong_column_s,
+                      watch_near=cfg.watch_near)
     guide.begin()
     col = tracker.columns[column]
     box_h = float(col.roi[3])
