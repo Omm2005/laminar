@@ -1,4 +1,4 @@
-"""A full pour episode watched by both cameras: python pour_episode.py A2b --run [--target 0.9]
+"""A full pour episode watched by both cameras: python pour_episode.py A2b[:50] [B2b:+50 ...] --run
 
 deliver.py's job (find the tray, grab the vial, carry it to the container's pour pose, back to its slot) with the
 level model doing the pour at the pour pose (software/laminar/pour_motor6: tilt the wrist until the liquid comes,
@@ -221,11 +221,12 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
         q = client.current_joints()
         toward = D.into_tray(pose)
         record["before"] = watch.snapshot()
+        want = target() if callable(target) else target     # e.g. "+50 %" is measured right now, before the pour
         # om/pour-fixes made the wrong-column alarm 0.2 mL for 0.2 s; on this rig an empty watched column at the edge
         # of the side view reads 0.6-2 mL of noise (people / glare), which aborted real pours. Keep PourGuide's own
         # 0.3 mL for 0.5 s, raised to 0.5 mL: a real stream into the wrong column passes that in well under a second
         # only the 2 channels each side of the target are watched (x1, at the far edge, read noise and aborted)
-        cfg = P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt, wrong_column_ml=0.5, wrong_column_s=0.5,
+        cfg = P6.PourConfig(target_frac=want, max_tilt_deg=max_tilt, wrong_column_ml=0.5, wrong_column_s=0.5,
                             watch_near=2)
         turn = None
         if mode == "tip":
@@ -233,7 +234,7 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
             reach = (len(table) - 1) * PT.TILT_STEP_DEG
             record["tip"] = {"heading_turn_deg": g, "reach_deg": reach}
             print(f"  all-joint pour into {column}: gripper turned {g:+.0f} deg about vertical first, tilt reaches "
-                  f"{reach:.0f} deg with the tip locked; target {target:.0%} of the box, max tilt "
+                  f"{reach:.0f} deg with the tip locked; target {want:.0%} of the box, max tilt "
                   f"{min(max_tilt, reach):.0f} deg")
             if g:
                 turn = M.plan_turn(q, M.fk_mm(q_start)[1], label="turn to the pour heading")
@@ -242,7 +243,7 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
         else:
             direction = int(D.tilt_sign(q, toward))
             print(f"  level-model pour into {column} ({'right' if direction > 0 else 'left'}, J6 "
-                  f"{'+' if direction > 0 else '-'}), target {target:.0%} of the box, max tilt {max_tilt:g} deg")
+                  f"{'+' if direction > 0 else '-'}), target {want:.0%} of the box, max tilt {max_tilt:g} deg")
             joint = P6.ServerTiltJoint(6)
         try:
             if dry:
@@ -267,11 +268,43 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
     return pour
 
 
+TARGET_CAP = 0.95   # never aim above this fraction of the column box (PourConfig's overflow margin is 0.05)
+
+
+def parse_spec(spec: str, default: float) -> tuple[str, str, float]:
+    """'A2b' -> ('A2b', 'abs', default); 'A2b:50' -> fill the column to 50 %; 'B2b:+50' -> add 50 % of the column
+    on top of what the level camera measures just before that pour. Percent of the column box."""
+    job, _, pct = spec.partition(":")
+    D.parse(job)                                  # validates "A2b"
+    if not pct:
+        return job, "abs", default
+    kind = "add" if pct.startswith("+") else "abs"
+    frac = float(pct.lstrip("+").rstrip("%")) / 100.0
+    if not 0.0 < frac <= 1.0:
+        raise SystemExit(f"{spec!r}: the percent must be between 0 and 100")
+    return job, kind, frac
+
+
+def resolve_target(kind: str, frac: float, watch: "Watch", column: str) -> tuple[float, float]:
+    """(target fraction of the box, level before the pour): 'add' is measured on the spot by the level camera."""
+    box_h = float(watch.tracker.columns[column].roi[3])
+    now = watch.tracker.read_stable(column).px / box_h if box_h else 0.0
+    want = frac if kind == "abs" else now + frac
+    if want > TARGET_CAP:
+        print(f"  target {want:.0%} of the box capped at {TARGET_CAP:.0%} (the column would overflow)")
+    want = min(want, TARGET_CAP)
+    if want <= now + 0.02:
+        print(f"  WARNING: column {column} already reads {now:.0%}, target {want:.0%}: the pour will stop at once")
+    return want, now
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("job", help="vial 2 container, e.g. A2b")
+    ap.add_argument("jobs", nargs="+",
+                    help="vial 2 container, optionally with a fill: A2b (to --target), A2b:50 (to 50 %% of the "
+                         "column), B2b:+50 (add 50 %% to what is there); several run one after another")
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
-    ap.add_argument("--target", type=float, default=0.9, help="stop at this fraction of the column box")
+    ap.add_argument("--target", type=float, default=0.9, help="default: stop at this fraction of the column box")
     ap.add_argument("--max-tilt", type=float, default=140.0, help="never tip the vial further than this (deg)")
     ap.add_argument("--dry-tilt", action="store_true", help="no vision: tilt to --max-tilt and back (empty vial)")
     ap.add_argument("--pour-mode", choices=["tip", "roll"], default="tip",
@@ -283,16 +316,18 @@ def main() -> None:
     if not a.run:
         raise SystemExit("this runs the real arm and both cameras: add --run (plan only: python deliver.py JOB "
                          "--image <scan photo>)")
-    _, cont = D.parse(a.job)
-    column = "ABCD"[cont - 1]
-    out = HERE / "logs" / time.strftime(f"episode_{a.job}_%Y%m%d_%H%M%S")
+    specs = [parse_spec(s, a.target) for s in a.jobs]
+    columns = ["ABCD"[D.parse(job)[1] - 1] for job, _, _ in specs]
+    name = "_".join(j.replace(":", "-").replace("+", "plus") for j in a.jobs)
+    out = HERE / "logs" / time.strftime(f"episode_{name}_%Y%m%d_%H%M%S")
     out.mkdir(parents=True)
     print(f"logging to {out.relative_to(HERE)}")
 
     # share the cameras with the dashboard (publish.py reads wrist_latest.jpg / side_latest.jpg / arm_status.json):
     # reuse a running wrist stream, borrow the side camera from live_view.py and give it back afterwards
     own_stream = not wrist_stream_running()
-    stream = subprocess.Popen([sys.executable, str(HERE / "wrist_stream.py"), "--camera", str(a.wrist_cam)])         if own_stream else None
+    stream = subprocess.Popen([sys.executable, str(HERE / "wrist_stream.py"), "--camera", str(a.wrist_cam)]) \
+        if own_stream else None
     if not own_stream:
         print("  wrist camera: using the wrist_stream.py already running (dashboard feed)")
     borrowed = take_side_camera(a.side_cam)
@@ -303,33 +338,49 @@ def main() -> None:
             stream.terminate()
         give_back_side_camera(borrowed)
         raise
-    if column not in watch.targets:
+    missing = sorted({c for c in columns if c not in watch.targets})
+    if missing:
         watch.stop()
         if stream:
             stream.terminate()
         give_back_side_camera(borrowed)
-        raise SystemExit(f"no level box {column} for container {a.job[-1]}: boxes are {', '.join(watch.targets)}")
+        raise SystemExit(f"no level box {', '.join(missing)}: boxes are {', '.join(watch.targets)}")
     time.sleep(2.0)
-    record: dict = {"job": a.job, "column": column, "target": a.target, "start": watch.snapshot()}
+    records, err = [], None
     D.HOOKS["phase"] = watch.set_phase
-    D.HOOKS["pour"] = make_pour(watch, column, a.target, a.max_tilt, record, a.pour_mode, a.dry_tilt)
-    err = None
     try:
-        D.main([a.job, "--run", "--camera", str(a.wrist_cam)])
-    except SystemExit as e:
-        err = str(e) if e.code not in (0, None) else None
-    except Exception as e:  # noqa: BLE001 - keep the logs whatever happened
-        err = repr(e)
+        for (job, kind, frac), column in zip(specs, columns):
+            record: dict = {"job": job, "column": column, "fill": f"{'+' if kind == 'add' else ''}{frac:.0%}",
+                            "start": watch.snapshot()}
+            records.append(record)
+            print(f"=== {job}: {'add ' if kind == 'add' else 'fill to '}{frac:.0%} of column {column}")
+
+            def target_now(kind=kind, frac=frac, column=column, record=record):
+                want, before = resolve_target(kind, frac, watch, column)
+                record["target"], record["level_before"] = round(want, 3), round(before, 3)
+                print(f"  column {column} reads {before:.0%} of its box: pouring to {want:.0%}")
+                return want
+
+            D.HOOKS["pour"] = make_pour(watch, column, target_now, a.max_tilt, record, a.pour_mode, a.dry_tilt)
+            try:
+                D.main([job, "--run", "--camera", str(a.wrist_cam)])
+            except SystemExit as e:
+                if e.code not in (0, None):
+                    err = f"{job}: {e}"
+            except Exception as e:  # noqa: BLE001 - keep the logs whatever happened
+                err = f"{job}: {e!r}"
+            time.sleep(1.0)
+            record["end"] = watch.snapshot()
+            if err:
+                print(f"not running the rest: {err}")
+                break
     finally:
-        time.sleep(1.0)
-        record["end"] = watch.snapshot()
-        record["error"] = err
-        record["phases"] = watch.phases
         watch.stop()
         if stream:
             stream.terminate()
         give_back_side_camera(borrowed)
-        (out / "summary.json").write_text(json.dumps(record, indent=2))
+        (out / "summary.json").write_text(json.dumps({"jobs": records, "error": err, "phases": watch.phases},
+                                                     indent=2))
         print(f"episode {'STOPPED: ' + err if err else 'done'}; logs in {out.relative_to(HERE)}")
 
 

@@ -92,3 +92,22 @@ def test_server_tilt_tracking_is_smooth_on_25_hz_updates():
         joints.append([PT.joints_at(table, tilt)[m] for m in range(1, 7)])
     jv = np.diff(np.array(joints), axis=0) / dt
     assert np.max(np.abs(np.diff(jv, axis=0))) < 10.0          # deg/s change per 10 ms tick
+
+
+def test_job_specs_and_targets():
+    from types import SimpleNamespace
+    import pour_episode as P
+    assert P.parse_spec("A2b:50", 0.9) == ("A2b", "abs", 0.5)
+    assert P.parse_spec("B2b:+50", 0.9) == ("B2b", "add", 0.5)
+    assert P.parse_spec("C2c", 0.9) == ("C2c", "abs", 0.9)
+
+    class Tr:
+        columns = {"B": SimpleNamespace(roi=(0, 0, 10, 200))}
+
+        def read_stable(self, name):
+            return SimpleNamespace(px=100.0)            # half full
+
+    w = SimpleNamespace(tracker=Tr())
+    assert P.resolve_target("abs", 0.7, w, "B") == (0.7, 0.5)
+    assert P.resolve_target("add", 0.3, w, "B")[0] == 0.8
+    assert P.resolve_target("add", 0.5, w, "B")[0] == P.TARGET_CAP   # 100 % is capped
