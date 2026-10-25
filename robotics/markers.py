@@ -1,34 +1,40 @@
 """Find the container tray with the wrist camera and drive the gripper above each container.
 
 The tray: the 4 containers are stuck together and always move as one. Each has an ArUco marker (DICT_4X4_50,
-ids 10-13 = containers 1-4, 40 mm) lying flat on the table beside it. Judges will move the tray, so nothing here
+ids 10-13 = containers 1-4, 20 mm black square) lying flat on the table beside it. Judges will move the tray, so nothing here
 hardcodes where it is: one photo from the SCAN POSE (arm high, wrist camera seeing the whole tray) says where.
 
 How, in plain words
-    1. Calibrate once (`calibrate`, while you teleop). With the tray in one place, touch the centre of each marker
-       with the gripper tip; forward kinematics of the follower's joints gives each marker's (x, y) in mm. Teleop up
-       to the scan pose and take a photo. Slide the tray far away and do it all again: 8 touched points.
-    2. From those: a homography (pixel -> table mm, valid for photos taken from the scan pose), the table height,
-       and the tray LAYOUT: where each marker sits in the tray's own frame (origin = the markers' centroid,
-       x axis = from marker 10 towards marker 13).
+    1. Calibrate once (`calibrate`, step by step). Pick a SCAN POSE: arm high, wrist camera seeing the tray from
+       above. Put the tray somewhere, touch the centre of each marker with the gripper tip (forward kinematics of
+       the follower's joints gives each marker's (x, y) in mm), then let arm_server.py drive to the scan pose
+       (base turned towards the tray) and take a photo. Repeat at 2+ tray positions spread over the area.
+    2. From those: a homography (pixel -> table mm, valid for photos taken from the scan pose) fitted to every
+       marker corner (markers are 20 mm squares, square to the tray line), the table height, and the tray LAYOUT:
+       where each marker sits in the tray's own frame (origin = the markers' centroid, x axis = from marker 10
+       towards marker 13).
     3. Afterwards one photo from the scan pose finds the tray: every visible marker's centre goes through the
        homography, and a rigid fit (rotation + translation, no scaling) of the layout onto those points gives the
        tray's (x, y, heading). Two visible markers are enough, so one or two can be hidden.
     4. Each container's position = the tray pose applied to its marker's layout position, hidden ones included.
 
-The scan pose must be the same for every photo (the homography is tied to it). `visit` goes there exactly through
-arm_server.py; during `calibrate` the second scan photo is only accepted when every joint is within --scan-tol of
-the first one.
+Learned on the real arm: photos must be taken UNDER POWER (arm_server holding the scan pose): the joints sag
+~2 deg under load, enough to move the view by centimetres, so a hand-held photo maps differently. The scan pose
+sees a band of distances from the base (about 450-570 mm for the first one); turning the base sweeps the band
+sideways but can't bring the camera closer. The map is only good where it was calibrated: spread the tray
+positions over the area the tray may be in.
 
 Commands (degrees for joints, mm in the arm base frame: x forward, y left, z up)
     python markers.py view                  live wrist camera: marker ids + the fitted tray outline. Never moves
                                             the arm; runs alongside teleop.py.
-    python markers.py calibrate             guided, while teleop.py runs; writes the `tray` section of
+    python markers.py calibrate STEP        scan-pose | touch POS ID | photo POS [DJ1] | finish | reset: one step
+                                            per call (see cmd_calibrate); finish writes the `tray` section of
                                             vision_calib.yaml and prints the error in mm
     python markers.py visit [--run]         arm_server.py running: scan pose -> find the tray -> for each container
                                             lift, travel, lower to HOVER_MM above its marker, gripper pointing
                                             down; Enter before every move. Without --run: plan and print only.
-Joints during teleop come from teleop_state.json, which teleop.py writes at 10 Hz.
+Joints come from teleop_state.json while teleop.py runs (it writes it at 10 Hz), else straight from the
+encoders with the motors off (the arm moved by hand).
 """
 from __future__ import annotations
 
@@ -44,22 +50,36 @@ import numpy as np
 import yaml
 
 import motion as M
-from vision import detect_markers
+from vision import rotate_about_base
 
 HERE = Path(__file__).resolve().parent
 CALIB_FILE = HERE / "vision_calib.yaml"     # shared with vision.py; this module owns the `tray` section
 TELEOP_STATE = HERE / "teleop_state.json"   # follower joints written by teleop.py while it runs
 STREAM_FILE = HERE / "wrist_latest.jpg"     # latest frame from wrist_stream.py, when it owns the camera
+SESSION_FILE = HERE / "tray_calib_session.json"  # calibrate's steps so far
 BENCH_FILE = HERE / "bench.yaml"
 
 MARKERS = {10: 1, 11: 2, 12: 3, 13: 4}      # ArUco id -> container number
-MARKER_MM = 40.0
+MARKER_MM = 20.0       # side of a marker's black square (measured on the tray)
 HOVER_MM = 100.0       # visit: gripper tip ends this far above the marker
 CARRY_MM = 60.0        # ... and travels between containers this much higher than that
 CAMERA = 2             # wrist camera, DirectShow index (indices shift after re-plugs: --camera)
-SCAN_TOL_DEG = 1.0     # calibrate: second scan photo must be this close to the first scan pose, every joint
+TOUCH_MAX_Z_MM = 100.0  # calibrate touch: the tip counts as on the table below this height
 STATE_MAX_AGE_S = 1.0  # teleop_state.json older than this = teleop.py is not running
 MOVE_SPEED = 15.0      # deg/s for the joint move to the scan pose
+SWEEP_DEG = (0, 25, -25, 50, -50)  # visit: base turns (J1, from the scan pose) tried until the tray is seen
+
+
+def detect_markers(image) -> list[tuple[int, np.ndarray]]:
+    """[(id, 4x2 corner pixels)] of every DICT_4X4_50 marker. Full error correction: on the real tray, marker 12
+    seen small and at an angle from the scan pose has a bit or two misread and the default rejects it; a wrong
+    id is still unlikely, since only ids 10-13 count and the rigid fit must agree."""
+    a = cv2.aruco
+    params = a.DetectorParameters()
+    params.errorCorrectionRate = 1.0
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    corners, ids, _ = a.ArucoDetector(a.getPredefinedDictionary(a.DICT_4X4_50), params).detectMarkers(gray)
+    return [] if ids is None else [(int(i), c.reshape(4, 2).astype(float)) for i, c in zip(ids.flatten(), corners)]
 
 
 # =============================================================================================
@@ -137,40 +157,68 @@ def tray_pose(layout: dict[int, np.ndarray], seen_xy: dict[int, np.ndarray]) -> 
             "containers": {MARKERS[i]: R @ np.asarray(layout[i]) + t for i in sorted(layout)}}
 
 
-def find_tray(frame, calib: dict) -> dict:
-    """One scan-pose photo -> tray pose (see tray_pose), plus "px" = the pixel centre of each seen marker."""
+def find_tray(frame, calib: dict, dj1: float = 0.0) -> dict:
+    """One scan-pose photo, taken with the base turned dj1 deg from the scan pose -> tray pose (see tray_pose),
+    plus "px" = the pixel centre of each seen marker."""
     px = {i: marker_center(c) for i, c in detect_markers(frame) if i in MARKERS}
     if not px:
         raise ValueError("no tray markers in the picture")
-    xy = dict(zip(px, px_to_mm(calib["homography"], list(px.values()))))
+    mm = rotate_about_base(px_to_mm(calib["homography"], list(px.values())), dj1)
+    xy = dict(zip(px, mm))
     pose = tray_pose(calib["layout_mm"], xy)
     pose["px"] = px
     return pose
 
 
+SQUARE = np.array([[-1, 1], [1, 1], [1, -1], [-1, -1]], float)  # ArUco corner order, seen from above
+
+
+def marker_corners_mm(center, line_deg: float, size: float = MARKER_MM) -> np.ndarray:
+    """Table (x, y) of a marker's 4 corners in ArUco order. The markers sit square to the tray line (marker 10 ->
+    13, measured on the real tray), so the corners follow from the touched centre and that line."""
+    return np.asarray(center, dtype=float) + (size / 2) * SQUARE @ rot(line_deg).T
+
+
 def calibrate_from(touches: list[dict], photos: list[dict]) -> tuple[dict, dict]:
-    """touches: [{"pos": 1|2, "id", "xy_mm", "z_mm"}], photos: [{"pos", "px": {id: (u, v)}}] -> (calib, report).
-    Each tray position contributes 4 touched points and the pixel centres from its scan photo."""
-    pairs_px, pairs_xy, labels = [], [], []
+    """touches: [{"pos", "id", "xy_mm", "z_mm"}] for 2+ tray positions; photos: [{"pos", "corners": {id: 4x2 px},
+    "dj1"?: deg}], one per position, all from the scan pose UNDER POWER (the joints sag ~2 deg under load, so a
+    hand-held photo sees from a different place), the base possibly turned by dj1 -> (calib, report).
+    Every marker corner seen is a pixel / table-mm pair for the homography; a photo taken with the base turned
+    pairs its pixels with the touches turned back by -dj1. Spread the tray positions over the area the tray may
+    be in: the map is only good where it was calibrated."""
+    at = {}
     for t in touches:
-        ph = next(p for p in photos if p["pos"] == t["pos"])
-        if t["id"] in ph["px"]:
-            pairs_px.append(ph["px"][t["id"]])
-            pairs_xy.append(t["xy_mm"])
-            labels.append(f"tray {t['pos']} marker {t['id']}")
-    H, err = fit_homography(pairs_px, pairs_xy)
-    # layout from the first position; the second, fitted onto it, says how rigid the tray really is
-    at = {p: {t["id"]: np.asarray(t["xy_mm"], dtype=float) for t in touches if t["pos"] == p} for p in (1, 2)}
-    layout = tray_layout(at[1])
-    rigid_rms = tray_pose(layout, at[2])["rms_mm"] if len(at.get(2, {})) >= 2 else None
-    if rigid_rms is not None:  # average both positions, each brought into the tray frame
-        ang, t, _ = rigid_fit([layout[i] for i in sorted(at[2])], [at[2][i] for i in sorted(at[2])])
-        back = {i: rot(ang).T @ (at[2][i] - t) for i in at[2]}
-        layout = {i: (layout[i] + back[i]) / 2 if i in back else layout[i] for i in layout}
+        at.setdefault(t["pos"], {})[t["id"]] = np.asarray(t["xy_mm"], dtype=float)
+    px, xy, centres = [], [], []
+    for ph in photos:
+        pts, dj1 = at[ph["pos"]], ph.get("dj1", 0.0)
+        d = pts[max(pts)] - pts[min(pts)]
+        line = math.degrees(math.atan2(d[1], d[0]))
+        for i, c in ph["corners"].items():
+            px.append(np.asarray(c, dtype=float))
+            xy.append(rotate_about_base(marker_corners_mm(pts[i], line), -dj1))
+            centres.append((ph["pos"], i, dj1, marker_center(c)))
+    H, err = fit_homography(np.vstack(px), np.vstack(xy))
+    # the error that matters: each marker centre found through the map vs. where the tip touched it
+    points = {f"tray {p} marker {i}": float(np.linalg.norm(rotate_about_base(px_to_mm(H, [c])[0], dj1) - at[p][i]))
+              for p, i, dj1, c in centres}
+    # layout from the first position; the others, fitted onto it, say how rigid the tray (and the touching) is,
+    # and are averaged in
+    ref, others = min(at), [p for p in sorted(at) if p != min(at)]
+    layout = tray_layout(at[ref])
+    rigid = [tray_pose(layout, at[p])["rms_mm"] for p in others if len(at[p]) >= 2]
+    sums = {i: [v] for i, v in layout.items()}
+    for p in others:
+        ang, t, _ = rigid_fit([layout[i] for i in sorted(at[p])], [at[p][i] for i in sorted(at[p])])
+        for i in at[p]:
+            sums[i].append(rot(ang).T @ (at[p][i] - t))
+    layout = {i: np.mean(v, axis=0) for i, v in sums.items()}
     zs = [t["z_mm"] for t in touches]
+    e = np.array(list(points.values()))
     calib = {"homography": H, "layout_mm": layout, "table_z_mm": float(np.mean(zs))}
-    report = {"points": dict(zip(labels, err)), "homography_rms_mm": float(np.sqrt(np.mean(err ** 2))),
-              "homography_max_mm": float(err.max()), "tray_rigid_rms_mm": rigid_rms,
+    report = {"points": points, "homography_rms_mm": float(np.sqrt(np.mean(e ** 2))),
+              "homography_max_mm": float(e.max()), "corner_rms_mm": float(np.sqrt(np.mean(err ** 2))),
+              "tray_rigid_rms_mm": float(np.mean(rigid)) if rigid else None,
               "table_z_spread_mm": float(max(zs) - min(zs))}
     return calib, report
 
@@ -260,7 +308,11 @@ def draw(frame, calib: dict | None):
     pose = None
     if calib:
         try:
-            pose = find_tray(frame, calib)
+            dj1 = teleop_joints()[1] - calib["scan_pose"][1]  # alongside teleop: the base may be turned
+        except RuntimeError:
+            dj1 = 0.0
+        try:
+            pose = find_tray(frame, calib, dj1)
         except ValueError:
             pass
     if pose:
@@ -296,83 +348,158 @@ def cmd_view(a) -> None:
         cv2.destroyAllWindows()
 
 
-def _scan_photo(cap, label: str, ref_pose: dict[int, float] | None, tol: float) -> tuple[dict, dict]:
-    """Live window until SPACE with all 4 markers seen (and, with ref_pose, every joint within tol).
-    Returns (scan joints, {id: pixel centre})."""
-    print(f"  {label}: teleop up to the scan pose so the camera sees the whole tray, then SPACE in the window "
-          f"(q aborts)")
-    while True:
-        frame = grab(cap)
-        img, _ = draw(frame, None)
-        seen = {i: marker_center(c) for i, c in detect_markers(frame) if i in MARKERS}
-        msg, ok = f"seen {sorted(seen)}", len(seen) == len(MARKERS)
-        try:
-            q = teleop_joints()
-            if ref_pose:
-                off = max(abs(q[j] - ref_pose[j]) for j in ref_pose)
-                ok = ok and off <= tol
-                msg += f"   off scan pose {off:.2f} deg (need <= {tol:g})"
-        except RuntimeError as e:
-            q, ok, msg = None, False, str(e)
-        cv2.putText(img, msg, (8, 470), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if ok else (0, 0, 255), 2)
-        cv2.imshow("markers calibrate", img)
-        k = cv2.waitKey(1) & 0xFF
-        if k in (ord("q"), 27):
-            raise SystemExit("calibration aborted, nothing saved")
-        if k == ord(" ") and ok:
-            cv2.imwrite(str(HERE / f"tray_scan_{label[-1]}.jpg"), frame)
-            return q, seen
-        if k == ord(" "):
-            print(f"    not yet: {msg}")
+_BUS = None
+
+
+def hand_joints() -> dict[int, float]:
+    """Follower joints {1..6: deg} straight from the motor encoders while the motors are off and the arm is moved
+    by hand. Two reads 0.3 s apart must agree within 0.5 deg (a stale read or a moving arm is refused). The CAN
+    adapter is opened once per process: Windows refuses a second open right after a close."""
+    global _BUS
+    from leader_arm import load_follower_zero
+    from robstride_can import P_MECH_POS, RobStrideBus
+    zero = load_follower_zero()
+    if _BUS is None:
+        import atexit
+        _BUS = RobStrideBus()
+        atexit.register(_BUS.close)
+    _BUS.drain(0.1)
+
+    def once():
+        q = {}
+        for mid in range(1, 7):
+            pos = _BUS.read_param_f32(mid, P_MECH_POS, timeout=0.2)
+            if pos is None:
+                raise RuntimeError(f"J{mid} did not answer")
+            q[mid] = math.degrees(pos) - zero[mid]  # the encoders report the real angle: no unwrapping
+        return q
+    a = once()
+    time.sleep(0.3)
+    b = once()
+    if max(abs(a[j] - b[j]) for j in a) > 0.5:
+        raise RuntimeError("arm still moving")
+    return b
+
+
+def current_joints() -> dict[int, float]:
+    """teleop.py's follower joints while it runs, else the encoders (arm moved by hand, motors off)."""
+    try:
+        return teleop_joints()
+    except RuntimeError:
+        return hand_joints()
+
+
+def outside_limits(q) -> list[str]:
+    return [f"J{j} {q[j]:.0f} (limits {lo:g}..{hi:g})" for j, (lo, hi) in M.JOINT_LIMITS_DEG.items()
+            if not lo - 0.5 <= q[j] <= hi + 0.5]
+
+
+def _session() -> dict:
+    return json.loads(SESSION_FILE.read_text()) if SESSION_FILE.exists() else {"touches": [], "photos": []}
 
 
 def cmd_calibrate(a) -> None:
-    cap = open_camera(a.camera)
-    touches, photos, scan_pose = [], [], None
-    try:
-        for pos in (1, 2):
-            print(f"\nTray position {pos}" + (" (slide the tray far from position 1 first)" if pos == 2 else ""))
-            for mid, cont in MARKERS.items():
-                while True:
-                    input(f"  teleop the gripper tip onto the centre of marker {mid} (container {cont}), Enter ")
-                    try:
-                        q = teleop_joints()
-                        break
-                    except RuntimeError as e:
-                        print(f"    {e}")
+    """One step per call, so it can be driven from a chat or a second terminal:
+        scan-pose            teleop / hold the arm where the camera sees the tray from above: saved as the scan pose
+        touch POS ID         hold the tip on marker ID of tray position POS: recorded when it sits still on the
+                             table (no typing while holding the arm; waits up to --wait s)
+        photo POS [DJ1]      arm_server.py running, hands off: drives to the scan pose with the base turned towards
+                             tray POS (or by DJ1 deg) and takes the photo
+        finish               fit, print the error per marker, save the `tray` section of vision_calib.yaml
+        reset                start over
+    Use 2+ tray positions spread over the area the tray may be in; every photo is taken under power."""
+    s = _session()
+    step, args = a.step, a.args
+    if step == "reset":
+        SESSION_FILE.unlink(missing_ok=True)
+        print("calibration session cleared")
+        return
+    if step == "scan-pose":
+        q = current_joints()
+        bad = outside_limits(q)
+        if bad:
+            raise SystemExit("NOT SAVED: arm_server and motion.py refuse a pose outside the joint limits: "
+                             + ", ".join(bad))
+        s["scan_pose"] = {str(j): round(v, 2) for j, v in q.items()}
+        print("scan pose saved: " + "  ".join(f"J{j}={v:.1f}" for j, v in q.items()))
+    elif step == "touch":
+        pos, mid = int(args[0]), int(args[1])
+        end = time.time() + a.wait
+        while True:
+            try:
+                q = current_joints()
                 p, _ = M.fk_mm(q)
-                touches.append({"pos": pos, "id": mid, "xy_mm": [float(p[0]), float(p[1])], "z_mm": float(p[2]),
-                                "joints": q})
-                print(f"    marker {mid}: ({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f}) mm")
-            q, px = _scan_photo(cap, f"scan photo {pos}", scan_pose, a.scan_tol)
-            scan_pose = scan_pose or q
-            photos.append({"pos": pos, "px": px})
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
-
-    calib, rep = calibrate_from(touches, photos)
-    print("\nerror per point (touched vs. homography of the photo), mm:")
-    for k, e in rep["points"].items():
-        print(f"  {k}: {e:.1f}")
-    print(f"homography: RMS {rep['homography_rms_mm']:.1f} mm, worst {rep['homography_max_mm']:.1f} mm")
-    if rep["tray_rigid_rms_mm"] is not None:
-        print(f"tray layout, position 2 fitted onto position 1: RMS {rep['tray_rigid_rms_mm']:.1f} mm "
-              "(large = a touch was off, or the tray isn't rigid)")
-    print(f"table height {calib['table_z_mm']:.1f} mm, spread {rep['table_z_spread_mm']:.1f} mm over the touches")
-    save_calib({
-        "created": time.strftime("%Y-%m-%d %H:%M:%S"), "camera": a.camera, "marker_mm": MARKER_MM,
-        "markers": {i: c for i, c in MARKERS.items()},
-        "scan_pose": {j: round(scan_pose[j], 2) for j in range(1, 7)},
-        "homography": np.asarray(calib["homography"]).tolist(),
-        "layout_mm": {i: [round(float(v), 2) for v in xy] for i, xy in calib["layout_mm"].items()},
-        "table_z_mm": round(calib["table_z_mm"], 2),
-        "error_mm": {k: (round(v, 2) if v is not None else None) for k, v in rep.items() if k != "points"},
-        "touches": [{k: v for k, v in t.items() if k != "joints"} | {"joints": {j: round(x, 2) for j, x in
-                                                                                 t["joints"].items()}}
-                    for t in touches],
-    })
-    print(f"saved the tray calibration to {CALIB_FILE.name}")
+                if p[2] < TOUCH_MAX_Z_MM:
+                    break
+            except RuntimeError:
+                pass
+            if time.time() > end:
+                raise SystemExit("timed out: the tip never sat still low on the table")
+            time.sleep(0.2)
+        s["touches"] = [t for t in s["touches"] if (t["pos"], t["id"]) != (pos, mid)]
+        s["touches"].append({"pos": pos, "id": mid, "xy_mm": [round(float(p[0]), 2), round(float(p[1]), 2)],
+                             "z_mm": round(float(p[2]), 2), "joints": {str(j): round(v, 2) for j, v in q.items()}})
+        print(f"tray {pos} marker {mid}: tip at ({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f}) mm")
+    elif step == "photo":
+        from arm_client import ArmClient
+        from vision import BASE_PIVOT_MM, BASE_SIGN
+        pos = int(args[0])
+        if "scan_pose" not in s:
+            raise SystemExit("save the scan pose first: markers.py calibrate scan-pose")
+        pts = [np.asarray(t["xy_mm"]) for t in s["touches"] if t["pos"] == pos]
+        if len(args) > 1:
+            dj1 = float(args[1])
+        else:  # turn the base from the scan pose's heading towards this tray
+            ax, ay = np.mean(pts, axis=0) - BASE_PIVOT_MM
+            p_scan, _ = M.fk_mm({int(j): v for j, v in s["scan_pose"].items()})
+            sx, sy = p_scan[:2] - BASE_PIVOT_MM
+            dj1 = round(BASE_SIGN * math.degrees(math.atan2(ay, ax) - math.atan2(sy, sx)), 1)
+        q = {int(j): v for j, v in s["scan_pose"].items()}
+        q[1] += dj1
+        print(f"scan pose with the base turned {dj1:+.1f} deg (J1 {q[1]:.1f}), at {MOVE_SPEED:g} deg/s")
+        ArmClient()._send({"op": "move", "joints": {str(j): v for j, v in q.items()}, "speed": MOVE_SPEED})
+        cap = open_camera(a.camera)
+        try:
+            time.sleep(1.0)  # still camera after the move
+            frame = grab(cap, settle=10)
+        finally:
+            cap.release()
+        corners = {i: c for i, c in detect_markers(frame) if i in MARKERS}
+        cv2.imwrite(str(HERE / f"tray_scan_{pos}.jpg"), frame)
+        print(f"markers seen {sorted(corners)} (photo in tray_scan_{pos}.jpg)")
+        if len(corners) < 2:
+            raise SystemExit("NOT SAVED: need 2+ markers; try another turn: markers.py calibrate photo POS DJ1")
+        s["photos"] = [ph for ph in s["photos"] if ph["pos"] != pos] + [
+            {"pos": pos, "dj1": dj1, "corners": {str(i): np.round(c, 2).tolist() for i, c in corners.items()}}]
+    elif step == "finish":
+        photos = [{"pos": ph["pos"], "dj1": ph["dj1"], "corners": {int(i): np.array(c) for i, c in ph["corners"].items()}}
+                  for ph in s["photos"]]
+        used = {ph["pos"] for ph in photos}
+        touches = [t for t in s["touches"] if t["pos"] in used]
+        calib, rep = calibrate_from(touches, photos)
+        print("marker centre through the map vs. where the tip touched it:")
+        for k, e in rep["points"].items():
+            print(f"  {k}: {e:.1f} mm")
+        print(f"RMS {rep['homography_rms_mm']:.1f} mm, worst {rep['homography_max_mm']:.1f} mm "
+              f"(all corners: RMS {rep['corner_rms_mm']:.1f} mm)")
+        if rep["tray_rigid_rms_mm"] is not None:
+            print(f"tray layout across positions: RMS {rep['tray_rigid_rms_mm']:.1f} mm (touching / tray rigidity)")
+        print(f"table height {calib['table_z_mm']:.1f} mm, spread {rep['table_z_spread_mm']:.1f} mm")
+        save_calib({
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "camera": a.camera, "marker_mm": MARKER_MM,
+            "markers": dict(MARKERS), "scan_pose": {int(j): v for j, v in s["scan_pose"].items()},
+            "homography": np.asarray(calib["homography"]).tolist(),
+            "layout_mm": {i: [round(float(v), 2) for v in xy] for i, xy in calib["layout_mm"].items()},
+            "table_z_mm": round(calib["table_z_mm"], 2),
+            "error_mm": {k: (round(v, 2) if v is not None else None) for k, v in rep.items() if k != "points"},
+            "touches": touches, "photos": [{**ph, "corners": {i: np.round(c, 2).tolist() for i, c in
+                                                                ph["corners"].items()}} for ph in photos],
+        })
+        print(f"saved the tray calibration to {CALIB_FILE.name}")
+        return
+    else:
+        raise SystemExit(f"unknown step {step!r}: scan-pose, touch, photo, finish, reset")
+    SESSION_FILE.write_text(json.dumps(s, indent=1))
 
 
 APPROACH = 0  # column of the tool rotation along the gripper: in this URDF the tip is 166 mm along the tool x
@@ -464,18 +591,37 @@ def cmd_visit(a) -> None:
         from arm_client import ArmClient
         client = ArmClient()
         client.current_joints()  # refuses now if arm_server.py isn't running
-        input(f"Enter: joint move to the scan pose at {MOVE_SPEED:g} deg/s (Ctrl+C stops) ")
-        client._send({"op": "move", "joints": {str(j): v for j, v in q_scan.items()}, "speed": MOVE_SPEED})
-        cap = open_camera(a.camera)
-        try:
-            frame = grab(cap, settle=10)
-        finally:
-            cap.release()
+        pose = None
+        for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view (all 4 markers, or the most seen)
+            q_look = {**q_scan, 1: q_scan[1] + dj1}
+            input(f"Enter: joint move to the scan pose{f' with the base turned {dj1:+g} deg' if dj1 else ''} "
+                  f"at {MOVE_SPEED:g} deg/s (Ctrl+C stops) ")
+            client._send({"op": "move", "joints": {str(j): v for j, v in q_look.items()}, "speed": MOVE_SPEED})
+            cap = open_camera(a.camera)
+            try:
+                frame = grab(cap, settle=10)
+            finally:
+                cap.release()
+            try:
+                look = find_tray(frame, calib, dj1)
+            except ValueError as e:
+                print(f"  base {dj1:+g} deg: {e}")
+                continue
+            print(f"  base {dj1:+g} deg: markers {look['seen']}")
+            if pose is None or len(look["seen"]) > len(pose["seen"]):
+                pose, q_from = look, q_look
+            if len(pose["seen"]) == len(MARKERS):
+                break
+        if pose is None:
+            raise SystemExit("tray not found at any base angle")
+        if q_from != q_look:  # the best view was an earlier angle: go back there before planning from it
+            client._send({"op": "move", "joints": {str(j): v for j, v in q_from.items()}, "speed": MOVE_SPEED})
+        q_scan = q_from
     else:
         if not a.image:
-            raise SystemExit("without --run, give a scan-pose photo: --image tray_scan_1.jpg")
-        frame = cv2.imread(a.image)
-    pose = find_tray(frame, calib)
+            raise SystemExit("without --run, give a scan-pose photo: --image tray_scan_1.jpg [--dj1 deg]")
+        pose = find_tray(cv2.imread(a.image), calib, a.dj1)
+        q_scan = {**q_scan, 1: q_scan[1] + a.dj1}
     print(f"tray at ({pose['xy'][0]:.1f}, {pose['xy'][1]:.1f}) mm, heading {pose['heading_deg']:.1f} deg, "
           f"fit {pose['rms_mm']:.1f} mm from markers {pose['seen']}")
     for k, xy in pose["containers"].items():
@@ -501,11 +647,13 @@ def cmd_visit(a) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["view", "calibrate", "visit"])
+    ap.add_argument("step", nargs="?", help="calibrate: scan-pose | touch POS ID | photo POS [DJ1] | finish | reset")
+    ap.add_argument("args", nargs="*")
+    ap.add_argument("--wait", type=float, default=60.0, help="calibrate touch: seconds to wait for a still tip")
     ap.add_argument("--camera", type=int, default=CAMERA, help="wrist camera index")
-    ap.add_argument("--scan-tol", type=float, default=SCAN_TOL_DEG,
-                    help="calibrate: max joint difference between the two scan photos, deg")
     ap.add_argument("--run", action="store_true", help="visit: move the arm (arm_server.py must be running)")
     ap.add_argument("--image", help="visit without --run: plan from this scan-pose photo")
+    ap.add_argument("--dj1", type=float, default=0.0, help="visit --image: the base was turned this much (deg)")
     a = ap.parse_args()
     {"view": cmd_view, "calibrate": cmd_calibrate, "visit": cmd_visit}[a.command](a)
 

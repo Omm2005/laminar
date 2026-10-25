@@ -13,3 +13,4 @@ vision_markers.pdf
 teleop_state.json
 tray_scan_*.jpg
 wrist_latest.jpg
+tray_calib_session.json

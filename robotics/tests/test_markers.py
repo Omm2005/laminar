@@ -84,8 +84,7 @@ def test_calibration_from_two_tray_positions():
     for pos, (xy, hd) in enumerate([((280, -30), 0), ((340, 80), 40)], start=1):
         true = tray_markers(xy, hd)
         frame = render(true, hd, ids=list(T.MARKERS))
-        px = {i: T.marker_center(c) for i, c in T.detect_markers(frame) if i in T.MARKERS}
-        photos.append({"pos": pos, "px": px})
+        photos.append({"pos": pos, "corners": {i: c for i, c in T.detect_markers(frame) if i in T.MARKERS}})
         for i, p in true.items():                     # touches land within ~1 mm of the true centre
             touches.append({"pos": pos, "id": i, "xy_mm": list(p + rng.normal(0, 0.7, 2)), "z_mm": 12.0})
     calib, rep = T.calibrate_from(touches, photos)
@@ -103,3 +102,17 @@ def test_point_down_aims_the_tool_axis_at_the_table():
     D = T.point_down(R)
     assert np.allclose(D[:, T.APPROACH], [0, 0, -1]) and np.allclose(D @ D.T, np.eye(3))
     assert math.isclose(np.linalg.det(D), 1.0)
+
+
+def test_tray_outside_the_scan_view_found_with_the_base_turned():
+    from vision import rotate_about_base
+    calib = calib_for(tray_markers((300, 0), 0))
+    true = tray_markers((260, 150), 50)               # off to the side: only seen after turning the base
+    dj1 = 30.0
+    # with the base turned by dj1 the camera sees the table as if it had turned the other way
+    in_view = {i: rotate_about_base(p, -dj1) for i, p in true.items()}
+    d = in_view[13] - in_view[10]
+    frame = render(in_view, math.degrees(math.atan2(d[1], d[0])) - math.degrees(math.atan2(-10, 210)), ids=[10, 11, 13])
+    pose = T.find_tray(frame, calib, dj1)
+    for i, cont in T.MARKERS.items():
+        assert np.linalg.norm(pose["containers"][cont] - true[i]) < 2.0, (i, pose["containers"][cont], true[i])
