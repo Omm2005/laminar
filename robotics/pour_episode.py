@@ -268,12 +268,13 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
     return pour
 
 
-TARGET_CAP = 0.95   # never aim above this fraction of the column box (PourConfig's overflow margin is 0.05)
+TARGET_CAP = 0.95   # "100 %" = this fraction of the column box (PourConfig's overflow margin is 0.05); every
+                    # requested percent is scaled by it, so 50 % = 47.5 % of the box and 100 % never overflows
 
 
 def parse_spec(spec: str, default: float) -> tuple[str, str, float]:
-    """'A2b' -> ('A2b', 'abs', default); 'A2b:50' -> fill the column to 50 %; 'B2b:+50' -> add 50 % of the column
-    on top of what the level camera measures just before that pour. Percent of the column box."""
+    """'A2b' -> ('A2b', 'abs', default); 'A2b:50' -> fill the column to 50 %; 'B2b:+50' -> add 50 % on top of what
+    the level camera measures just before that pour. Percent of a FULL column, where full = TARGET_CAP of the box."""
     job, _, pct = spec.partition(":")
     D.parse(job)                                  # validates "A2b"
     if not pct:
@@ -286,16 +287,18 @@ def parse_spec(spec: str, default: float) -> tuple[str, str, float]:
 
 
 def resolve_target(kind: str, frac: float, watch: "Watch", column: str) -> tuple[float, float]:
-    """(target fraction of the box, level before the pour): 'add' is measured on the spot by the level camera."""
+    """(target as a fraction of the BOX, level before the pour as a fraction of FULL). frac is a fraction of full
+    (full = TARGET_CAP of the box); 'add' is measured on the spot by the level camera."""
     box_h = float(watch.tracker.columns[column].roi[3])
-    now = watch.tracker.read_stable(column).px / box_h if box_h else 0.0
+    now_box = watch.tracker.read_stable(column).px / box_h if box_h else 0.0
+    now = now_box / TARGET_CAP
     want = frac if kind == "abs" else now + frac
-    if want > TARGET_CAP:
-        print(f"  target {want:.0%} of the box capped at {TARGET_CAP:.0%} (the column would overflow)")
-    want = min(want, TARGET_CAP)
+    if want > 1.0:
+        print(f"  target {want:.0%} capped at 100 % (= {TARGET_CAP:.0%} of the box)")
+    want = min(want, 1.0)
     if want <= now + 0.02:
-        print(f"  WARNING: column {column} already reads {now:.0%}, target {want:.0%}: the pour will stop at once")
-    return want, now
+        print(f"  WARNING: column {column} is already at {now:.0%}, target {want:.0%}: the pour will stop at once")
+    return want * TARGET_CAP, now
 
 
 def main() -> None:
@@ -304,7 +307,7 @@ def main() -> None:
                     help="vial 2 container, optionally with a fill: A2b (to --target), A2b:50 (to 50 %% of the "
                          "column), B2b:+50 (add 50 %% to what is there); several run one after another")
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
-    ap.add_argument("--target", type=float, default=0.9, help="default: stop at this fraction of the column box")
+    ap.add_argument("--target", type=float, default=0.9, help="default fill, fraction of full (full = 95 %% of the box)")
     ap.add_argument("--max-tilt", type=float, default=140.0, help="never tip the vial further than this (deg)")
     ap.add_argument("--dry-tilt", action="store_true", help="no vision: tilt to --max-tilt and back (empty vial)")
     ap.add_argument("--pour-mode", choices=["tip", "roll"], default="tip",
@@ -358,7 +361,8 @@ def main() -> None:
             def target_now(kind=kind, frac=frac, column=column, record=record):
                 want, before = resolve_target(kind, frac, watch, column)
                 record["target"], record["level_before"] = round(want, 3), round(before, 3)
-                print(f"  column {column} reads {before:.0%} of its box: pouring to {want:.0%}")
+                print(f"  column {column} is at {before:.0%}: pouring to {want / TARGET_CAP:.0%} "
+                      f"({want:.0%} of its box)")
                 return want
 
             D.HOOKS["pour"] = make_pour(watch, column, target_now, a.max_tilt, record, a.pour_mode, a.dry_tilt)

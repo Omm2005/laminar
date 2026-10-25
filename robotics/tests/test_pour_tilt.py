@@ -107,7 +107,9 @@ def test_job_specs_and_targets():
         def read_stable(self, name):
             return SimpleNamespace(px=100.0)            # half full
 
-    w = SimpleNamespace(tracker=Tr())
-    assert P.resolve_target("abs", 0.7, w, "B") == (0.7, 0.5)
-    assert P.resolve_target("add", 0.3, w, "B")[0] == 0.8
-    assert P.resolve_target("add", 0.5, w, "B")[0] == P.TARGET_CAP   # 100 % is capped
+    w = SimpleNamespace(tracker=Tr())                  # 100 px of a 200 px box = 50 % of the box
+    want, before = P.resolve_target("abs", 0.5, w, "B")
+    assert abs(want - 0.5 * P.TARGET_CAP) < 1e-9 and abs(before - 0.5 / P.TARGET_CAP) < 1e-9
+    assert abs(P.resolve_target("add", 0.3, w, "B")[0] - (0.5 + 0.3 * P.TARGET_CAP)) < 1e-9
+    assert P.resolve_target("add", 0.6, w, "B")[0] == P.TARGET_CAP         # past 100 %: capped at full
+    assert P.resolve_target("abs", 1.0, w, "B")[0] == P.TARGET_CAP         # 100 % = 95 % of the box
