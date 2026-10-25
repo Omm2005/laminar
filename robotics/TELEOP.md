@@ -41,9 +41,9 @@ The candleLight adapter enumerates with WinUSB on Windows; `libusb-package` prov
 | `kinematics.py` | Forward kinematics from the vendor URDF (`model/rebot_b601_rs.urdf`) in the follower's joint frame. |
 | `snap.py` | Grabs one frame from the wrist camera. |
 | `move_tool.py` | Straight-line tool moves via IK through `arm_server.py`: `--fwd/--left/--up` metres, orientation held. |
-| `markers.py` | Wrist-camera tray finder: `view` (live ids + tray outline), `calibrate scan-pose / touch POS ID / photo POS / finish` (step by step), `visit [--run]` (find the tray, lock in, hover 50 mm above each marker centre with sag correction). |
+| `markers.py` | Wrist-camera tray finder: `view` (live ids + tray outline), `calibrate scan-pose / touch POS ID / photo POS / shape POS / finish` (step by step), `visit [--run]` (find the tray, lock in, hover 50 mm above each marker centre with sag correction). |
 | `deliver.py` | `python deliver.py A2c --run`: find container c, grab vial A (teleop replay), rise 150 / travel / lower 110 over the container (sag-corrected), then everything in reverse. `CONTAINER_OFFSET_MM` = where to go relative to each marker (zero for now). |
-| `wrist_stream.py` | Live wrist-camera window + `wrist_latest.jpg` for other scripts (Windows lets one process own a camera). |
+| `wrist_stream.py` | Live wrist-camera window + `wrist_latest.jpg` for other scripts (Windows lets one process own a camera). Asks for 10 fps to keep USB traffic down. |
 | `compensation.py` | Fits gravity + friction feedforward from a Tiger run (`fit --run ID`) into `compensation.json` (committed, this arm). |
 | `smooth_path.py` | Zero-phase smoothing used by `arm_server` for every path; CLI shows how much it changes a saved motion. |
 | `run_log.py` / `arm_trace.py` | Every arm-moving process logs itself as a Tiger Data run (with `TIGER_DATABASE_URL` or the repo `.env`); `arm_server` writes the 100 Hz trace. |
@@ -104,8 +104,8 @@ the tray layout (2 visible markers are enough). Calibration, learned the hard wa
 - **Every scan photo under power** (`arm_server` holding the scan pose). Under load J3 sags ~2.4 deg and J4 ~1 deg,
   which moves the view ~30 mm vs. a hand-held photo.
 - **Spread the calibration over the area the tray may be in.** A map fitted at one spot was 5-10 % stretched
-  elsewhere (20 mm squares read 17.6-20.3 mm). `markers.calibrate_from` can also use photos of the tray at untouched
-  spots: the tray's known shape (20 mm squares, layout) constrains the map there.
+  elsewhere (20 mm squares read 17.6-20.3 mm). `calibrate shape POS` photographs the tray at a new spot with NO
+  touching: the tray's known shape (20 mm squares, layout) constrains the map there. Do several, then `finish`.
 - The scan pose sees a band ~450-570 mm from the base; turning the base (J1) sweeps it sideways only.
 - Touch markers by hand with the motors off: `calibrate touch` records by itself when the tip sits still on the table.
 - `visit` / `deliver` measure the tip from the encoders after every travel and lower and correct for the sag
@@ -120,7 +120,8 @@ commands still reached the motors, replies didn't. `arm_server` saw "lost feedba
 by the same check, and its "disable motors" got through: the motors let go with the arm up. Earlier dropouts killed
 the whole link, so the disable never arrived and the arm stalled instead. Now:
 
-- the receive thread survives USB read errors (counted in `bus.rx_errors`, printed);
+- the receive thread survives USB read errors (counted in `bus.rx_errors`, printed, and shown as `can_rx_errors`
+  in `arm_status.json`: anything above 0 means the USB link is struggling);
 - on lost feedback / fault / temperature / Ctrl+C, `arm_server` holds the arm with torque for 2 s waiting for the
   feedback, then eases to rest (8 deg/s on commands alone if feedback is still gone), and disables **only once at
   rest**; nothing aborts that return to rest. If it can't finish, the motors are left holding (never dropped).

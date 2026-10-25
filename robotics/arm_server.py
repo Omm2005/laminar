@@ -173,6 +173,7 @@ def main():
             "torque": {f"J{m}": round(bus.state[m]["torque"], 2) for m in ids if m in bus.state},
             "loop_hz": clock["hz"],
             "max_temp_c": max((s["temp"] for s in bus.state.values()), default=None),
+            "can_rx_errors": getattr(bus, "rx_errors", None),  # USB read errors the CAN receive thread survived
             "gripper": {"target": round(grip["target"], 1), "torque_limit": grip["limit"],
                         "pos": round(rel(GRIPPER), 1) if st7 else None,
                         "vel_rad_s": round(st7.get("vel", 0.0), 3), "torque": round(st7.get("torque", 0.0), 2)},

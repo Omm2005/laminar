@@ -68,7 +68,8 @@ def test_lost_feedback_eases_to_rest_before_disabling(server):
     threading.Timer(0.5, lambda: setattr(server, "rx_dead", True)).start()   # the replies stop mid-hold
     t0 = time.time()
     arm_server.main()
-    disables = [e for e in server.log if e[0] == "disable" and e[1] != 7]
+    first_enable = next(k for k, e in enumerate(server.log) if e[0] == "enable")   # startup disables don't count
+    disables = [e for e in server.log[first_enable:] if e[0] == "disable" and e[1] != 7]
     assert disables, "motors were never disabled"
     # every arm joint was commanded back to rest (0 deg) before its motor was let go
     assert all(abs(e[2]) < 0.5 for e in disables[-6:]), disables[-6:]

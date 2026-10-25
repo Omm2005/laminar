@@ -21,6 +21,9 @@ a = ap.parse_args()
 cap = cv2.VideoCapture(a.camera, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+# 10 fps, not 30: a third of the USB traffic. The camera shares a USB hub with the arm's CAN adapter, and the CAN
+# dropouts of 2026-10-24 all came after this stream started; one still frame at a time is all the scripts use.
+cap.set(cv2.CAP_PROP_FPS, 10)
 t_save = 0.0
 while True:
     ok, frame = cap.read()

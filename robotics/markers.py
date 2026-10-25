@@ -27,7 +27,7 @@ positions over the area the tray may be in.
 Commands (degrees for joints, mm in the arm base frame: x forward, y left, z up)
     python markers.py view                  live wrist camera: marker ids + the fitted tray outline. Never moves
                                             the arm; runs alongside teleop.py.
-    python markers.py calibrate STEP        scan-pose | touch POS ID | photo POS [DJ1] | finish | reset: one step
+    python markers.py calibrate STEP        scan-pose | touch POS ID | photo POS [DJ1] | shape POS | finish | reset
                                             per call (see cmd_calibrate); finish writes the `tray` section of
                                             vision_calib.yaml and prints the error in mm
     python markers.py visit [--run]         arm_server.py running: scan pose -> find the tray -> for each container
@@ -470,6 +470,8 @@ def cmd_calibrate(a) -> None:
                              table (no typing while holding the arm; waits up to --wait s)
         photo POS [DJ1]      arm_server.py running, hands off: drives to the scan pose with the base turned towards
                              tray POS (or by DJ1 deg) and takes the photo
+        shape POS            arm_server.py running: a photo of the tray at a new, UNTOUCHED spot (finds it itself);
+                             its known shape tightens the map there. Do several, spread over the area.
         finish               fit, print the error per marker, save the `tray` section of vision_calib.yaml
         reset                start over
     Use 2+ tray positions spread over the area the tray may be in; every photo is taken under power."""
@@ -505,6 +507,28 @@ def cmd_calibrate(a) -> None:
         s["touches"].append({"pos": pos, "id": mid, "xy_mm": [round(float(p[0]), 2), round(float(p[1]), 2)],
                              "z_mm": round(float(p[2]), 2), "joints": {str(j): round(v, 2) for j, v in q.items()}})
         print(f"tray {pos} marker {mid}: tip at ({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f}) mm")
+    elif step == "shape":
+        # a photo of the tray at a new spot, NO touching: finish fits the map so that the tray's known shape
+        # (20 mm squares, layout) comes out right there too. arm_server.py running, hands off.
+        from arm_client import ArmClient
+        pos = int(args[0])
+        if any(t["pos"] == pos for t in s["touches"]):
+            raise SystemExit(f"tray position {pos} has touches: use `photo {pos}` for it, or pick a new number")
+        calib = load_calib()
+        _, q = locate_tray(ArmClient(), calib, a.camera, confirm=lambda *x: None)
+        dj1 = round(q[1] - calib["scan_pose"][1], 1)
+        cap = open_camera(a.camera)
+        try:
+            frame = grab(cap, settle=10)
+        finally:
+            cap.release()
+        corners = {i: c for i, c in detect_markers(frame) if i in MARKERS}
+        cv2.imwrite(str(HERE / f"tray_scan_{pos}.jpg"), frame)
+        print(f"tray position {pos} (no touches): base turned {dj1:+.1f} deg, markers {sorted(corners)}")
+        if len(corners) < 2:
+            raise SystemExit("NOT SAVED: need 2+ markers")
+        s["photos"] = [ph for ph in s["photos"] if ph["pos"] != pos] + [
+            {"pos": pos, "dj1": dj1, "corners": {str(i): np.round(c, 2).tolist() for i, c in corners.items()}}]
     elif step == "photo":
         from arm_client import ArmClient
         from vision import BASE_PIVOT_MM, BASE_SIGN
@@ -788,7 +812,7 @@ def cmd_visit(a) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["view", "calibrate", "visit"])
-    ap.add_argument("step", nargs="?", help="calibrate: scan-pose | touch POS ID | photo POS [DJ1] | finish | reset")
+    ap.add_argument("step", nargs="?", help="calibrate: scan-pose | touch POS ID | photo POS [DJ1] | shape POS | finish | reset")
     ap.add_argument("args", nargs="*")
     ap.add_argument("--wait", type=float, default=60.0, help="calibrate touch: seconds to wait for a still tip")
     ap.add_argument("--camera", type=int, default=CAMERA, help="wrist camera index")
