@@ -1,56 +1,52 @@
 # Pour poses relative to each container's ArUco marker, learned by `python deliver.py learn-offsets`.
+# a, b, c re-taught 2026-10-25 03:4x by teleop (tray found in handeye photo 12); d kept from before.
 # Tray frame: origin = the marker centre, x = along the tray line (marker 10 -> 13), mm and degrees.
-# container b shifted one channel (10.2 mm) towards c by hand after a real pour, see its note
-# container c aligned with b's working along-tray offset by hand, see its note
-learned: '2026-10-25 01:31:44'
+learned: '2026-10-25 03:38:53'
 tray_at_learn:
-  xy_mm: [417.19, 294.45]
-  heading_deg: -1.19
-  rms_mm: 3.79
+  xy_mm: [415.92, 339.06]
+  heading_deg: -2.53
+  rms_mm: 1.48
   seen: [10, 11, 12, 13]
 containers:
   1:
     marker: 10
     spot: vial_A_final_position
-    dxy_mm: [15.23, -0.67]
-    distance_mm: 15.25
-    bearing_deg: -2.5
-    z_mm: 194.93
-    heading_offset_deg: 32.68
+    dxy_mm: [48.58, -14.55]
+    distance_mm: 50.72
+    bearing_deg: -16.68
+    z_mm: 214.99
+    heading_offset_deg: -5.39
     R_tray:
-    - [0.840519, -0.539447, -0.050242]
-    - [0.539155, 0.84196, -0.020371]
-    - [0.053291, -0.009966, 0.998529]
-    joints: {1: -41.3, 2: 100.7, 3: 27.4, 4: 76.4, 5: -9.8, 6: 1.1}
+    - [0.979155, 0.046974, -0.197609]
+    - [-0.092313, 0.969522, -0.226948]
+    - [0.180926, 0.240459, 0.953649]
+    joints: {1: -57.8, 2: 131.7, 3: 65.8, 4: 90.0, 5: -63.7, 6: 7.7}
   2:
     marker: 11
     spot: vial_B_final_position
-    dxy_mm: [21.7, 4.01]
-    distance_mm: 22.07
-    bearing_deg: 10.47
-    z_mm: 193.53
-    heading_offset_deg: 32.88
+    dxy_mm: [8.69, 12.24]
+    distance_mm: 15.01
+    bearing_deg: 54.63
+    z_mm: 230.67
+    heading_offset_deg: 4.52
     R_tray:
-    - [0.837917, -0.541472, -0.068582]
-    - [0.5416, 0.840436, -0.018332]
-    - [0.067565, -0.021783, 0.997477]
-    joints: {1: -38.3, 2: 106.4, 3: 33.1, 4: 77.2, 5: -6.6, 6: 1.7}
-    note: 'dx +10.2 mm (one channel towards c): the 2026-10-25 01:47 A2b pour landed one channel towards a'
+    - [0.969077, -0.093543, -0.228342]
+    - [0.076619, 0.993691, -0.081906]
+    - [0.234563, 0.061878, 0.970129]
+    joints: {1: -58.1, 2: 128.8, 3: 62.2, 4: 90.0, 5: -53.8, 6: 15.6}
   3:
     marker: 12
     spot: vial_C_final_position
-    dxy_mm: [21.7, 4.88]
-    distance_mm: 22.24
-    bearing_deg: 12.67
-    z_mm: 207.76
-    heading_offset_deg: 31.87
+    dxy_mm: [5.5, -6.13]
+    distance_mm: 8.24
+    bearing_deg: -48.09
+    z_mm: 242.27
+    heading_offset_deg: 3.0
     R_tray:
-    - [0.845832, -0.527912, -0.076667]
-    - [0.525791, 0.849299, -0.047272]
-    - [0.090069, -0.000326, 0.995936]
-    joints: {1: -37.1, 2: 107.8, 3: 38.3, 4: 74.7, 5: -6.4, 6: 0.6}
-    note: 'dx +0.8 -> +21.7 mm: same along-tray offset from its marker as b, which poured into B (2026-10-25 02:01); the taught
-      c pose was ~1 container short'
+    - [0.973227, -0.084143, -0.213893]
+    - [0.050937, 0.9864, -0.15627]
+    - [0.224133, 0.141191, 0.964277]
+    joints: {1: -54.1, 2: 126.3, 3: 63.4, 4: 84.1, 5: -51.7, 6: 8.6}
   4:
     marker: 13
     spot: vial_D_final_position
