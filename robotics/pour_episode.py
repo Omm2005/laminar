@@ -204,6 +204,7 @@ def dry_tilt(joint, direction: int, max_tilt: float, watch: "Watch"):
     return SimpleNamespace(ok=True, result="dry", reason=f"tilted to {reach:.0f} deg and back", max_tilt_deg=reach)
 
 
+AIM_FULL_STEP_BELOW_ML = 0.3   # the target rose less than this before the wrong channel filled: a whole channel off
 AIM_RETRIES = 2   # the stream went into a neighbour channel: move one channel the other way and pour on, this often
 
 
@@ -279,24 +280,34 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
         want = target() if callable(target) else target     # e.g. "+50 %" is measured right now, before the pour
         along = T.rot(float(pose["heading_deg"])) @ np.array([1.0, 0.0])   # tray line, marker 10 -> 13 (a -> d)
         pitch = channel_pitch_mm()
-        q, shifted, attempts = q0, 0.0, []
+        q, shifted, attempts, last_side, last_step = q0, 0.0, [], None, 0.0
         for k in range(AIM_RETRIES + 1):
+            start_ml = watch.snapshot()[column]["ml"]
             r = pour_once(client, q, toward, want)
             time.sleep(1.0)
+            rose_ml = watch.snapshot()[column]["ml"] - start_ml
             attempts.append({"shift_mm": round(shifted, 1), **{a: getattr(r, a, None)
                                                               for a in ("result", "reason", "wrong_side")}})
             print(f"  pour: {r.result} - {r.reason}")
             side = getattr(r, "wrong_side", None)
             if dry or r.result != "aborted" or side not in ("left", "right") or k == AIM_RETRIES:
                 break
-            # LEFT of the target = towards a (-x along the tray): move the other way, one channel
-            step = pitch if side == "left" else -pitch
+            # LEFT of the target = towards a (-x along the tray): move the other way. A whole channel only when the
+            # target got (almost) nothing; when it filled first and the edge of the stream spilled over, a third of
+            # one; after a miss on the other side, half the last step (B2b 12:03: +2.3 mL into B, then x4; a full
+            # channel back went into x3, and a full channel again into x4)
+            if last_side and side != last_side:
+                size = abs(last_step) / 2
+            else:
+                size = pitch if rose_ml < AIM_FULL_STEP_BELOW_ML else pitch / 3
+            step = size if side == "left" else -size
+            last_side, last_step = side, step
             shifted += step
             p, _ = M.fk_mm(q)
             goal = p + np.array([along[0] * step, along[1] * step, 0.0])
             print(f"  aim: the stream went {side.upper()} of {column}: moving the pour point {abs(step):.1f} mm "
                   f"{'towards d' if step > 0 else 'towards a'} along the tray and pouring on")
-            mv = M.plan_line(q, goal, None, speed_mm_s=10.0, label="aim one channel over")
+            mv = M.plan_line(q, goal, None, speed_mm_s=10.0, label="aim correction")
             print("  " + str(client.run(mv).get("result")))
             q = client.current_joints()
         record["after"] = watch.snapshot()
