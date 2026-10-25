@@ -934,7 +934,7 @@ def main() -> int:
             joint.close()
             print("motor 6 released")
 
-    from cameras import LatestFrame, open_camera
+    from cameras import OPERATION_MODE, LatestFrame, open_camera
 
     if a.boxes:
         # no calibration: you draw the box(es), the crop model reads them and the columns around them live
@@ -942,7 +942,7 @@ def main() -> int:
             print(f"NOT TRAINED: {Path(a.seg_model).name} missing. In sense/: train_seg.py")
             return 1
         import live_view
-        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
+        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam, mode=OPERATION_MODE)).start()
         time.sleep(0.5)
         boxes = live_view.get_boxes(cam, a.new_boxes)
         if not boxes:
@@ -980,7 +980,7 @@ def main() -> int:
             return 1
         from scene_level import SceneModel, confirm_columns
         from seg_level import SegLevelTracker
-        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam)).start()
+        cam = LatestFrame(open_camera(int(a.cam) if a.cam.isdigit() else a.cam, mode=OPERATION_MODE)).start()
         time.sleep(0.5)
         columns, col = confirm_columns(cam, SceneModel(a.scene_model), a.capacity_ml, target=a.col)
         if columns is None:

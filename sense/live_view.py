@@ -196,9 +196,34 @@ def build(cam, boxes: list[list[int]], seg_model: str, capacity_ml: float, frame
     return tracker, names, targets
 
 
+def _frame_size(cam) -> tuple[int, int] | None:
+    f = cam.first() if hasattr(cam, "first") else cam.read()[0]
+    t_end = time.time() + 5
+    while f is None and time.time() < t_end:
+        time.sleep(0.02)
+        f = cam.read()[0]
+    return (f.shape[1], f.shape[0]) if f is not None else None
+
+
+def scale_boxes(boxes: list[list[int]], size_from, size_to) -> list[list[int]]:
+    """Boxes drawn at one resolution, at another of the same view (ultrawide 1920x1080 -> wide 1280x720)."""
+    sx, sy = size_to[0] / size_from[0], size_to[1] / size_from[1]
+    return [[round(b[0] * sx), round(b[1] * sy), round(b[2] * sx), round(b[3] * sy)] for b in boxes]
+
+
 def get_boxes(cam, new: bool, path: Path = BOXES_FILE) -> list[list[int]] | None:
+    """The boxes, at this camera's resolution. Saved as {"size": [w, h], "boxes": [...]}, so boxes drawn in
+    ultrawide are scaled for a camera opened wide (the pour); an old bare list is taken as drawn at 640x480."""
     if not new and path.exists():
-        boxes = json.loads(path.read_text())
+        saved = json.loads(path.read_text())
+        boxes, size = (saved["boxes"], tuple(saved["size"])) if isinstance(saved, dict) else (saved, (640, 480))
+        now = _frame_size(cam)
+        if now and tuple(now) != size:
+            if abs(now[0] / now[1] - size[0] / size[1]) > 0.01:
+                print(f"WARNING: boxes were drawn at {size[0]}x{size[1]}, a different shape of view than "
+                      f"{now[0]}x{now[1]}: redraw them (--new-boxes)")
+            boxes = scale_boxes(boxes, size, now)
+            print(f"boxes drawn at {size[0]}x{size[1]}, scaled to {now[0]}x{now[1]}")
         print(f"using the boxes saved in {path.name} ({len(boxes)}); add --new-boxes or press b to redraw")
         return boxes
     frame = cam.first() if hasattr(cam, "first") else None     # a video: draw on its first frame
@@ -215,7 +240,7 @@ def get_boxes(cam, new: bool, path: Path = BOXES_FILE) -> list[list[int]] | None
     print("draw the box(es) in the camera window, then press ENTER (click the window first)")
     boxes = draw_boxes(frame, cam if live else None)
     if boxes:
-        path.write_text(json.dumps(boxes))
+        path.write_text(json.dumps({"size": [frame.shape[1], frame.shape[0]], "boxes": boxes}))
     return boxes
 
 

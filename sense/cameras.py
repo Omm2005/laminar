@@ -1,6 +1,8 @@
 """Camera helpers for Laminar.
 
-- open_camera(): open a USB camera with fixed settings (MJPEG, resolution, exposure locked)
+- open_camera(): open a USB camera with fixed settings (MJPEG, resolution, exposure locked). Always ULTRAWIDE
+  (1920x1080, the side camera's widest 16:9 view) unless told otherwise; the pour (operation) opens it WIDE
+  (1280x720: the same 16:9 view, fewer pixels, so the level model keeps its reading rate).
 - LatestFrame: background thread that always holds the NEWEST frame, so the pour loop
   never reads a stale, buffered frame (stale frames = extra lag = overshoot).
 - list_cameras(): quick scan to find which index is which camera.
@@ -17,10 +19,18 @@ import time
 import cv2
 
 
-def open_camera(src: int | str, width: int = 640, height: int = 480, fps: int = 30,
+MODES = {"ultrawide": (1920, 1080), "wide": (1280, 720)}   # both 16:9 = the same field of view, so boxes drawn
+DEFAULT_MODE = "ultrawide"                                  # in one are scaled to the other (live_view.get_boxes)
+OPERATION_MODE = "wide"                                     # what the pour opens the camera in
+
+
+def open_camera(src: int | str, width: int | None = None, height: int | None = None, fps: int = 30,
                 mjpg: bool = True, exposure: float | None = None,
-                wb_kelvin: int | None = None) -> cv2.VideoCapture:
-    """Open a camera and lock its settings. Prints what the camera actually accepted."""
+                wb_kelvin: int | None = None, mode: str | None = None) -> cv2.VideoCapture:
+    """Open a camera and lock its settings. Prints what the camera actually accepted.
+    Size: width/height if given, else MODES[mode] (default DEFAULT_MODE = ultrawide)."""
+    if width is None or height is None:
+        width, height = MODES[mode or DEFAULT_MODE]
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera {src!r}")
@@ -115,12 +125,13 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="List cameras or preview one")
     p.add_argument("--cam", help="index or device path to preview")
+    p.add_argument("--mode", choices=sorted(MODES), default=DEFAULT_MODE)
     a = p.parse_args()
     if a.cam is None:
         list_cameras()
     else:
         src = int(a.cam) if a.cam.isdigit() else a.cam
-        cam = LatestFrame(open_camera(src)).start()
+        cam = LatestFrame(open_camera(src, mode=a.mode)).start()
         while True:
             f, _ = cam.read()
             cv2.putText(f, f"{cam.fps_measured:.1f} fps", (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
