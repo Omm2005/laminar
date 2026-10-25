@@ -1,6 +1,7 @@
 # Pour poses relative to each container's ArUco marker, learned by `python deliver.py learn-offsets`.
 # Tray frame: origin = the marker centre, x = along the tray line (marker 10 -> 13), mm and degrees.
 # container b shifted one channel (10.2 mm) towards c by hand after a real pour, see its note
+# container c aligned with b's working along-tray offset by hand, see its note
 learned: '2026-10-25 01:31:44'
 tray_at_learn:
   xy_mm: [417.19, 294.45]
@@ -38,9 +39,9 @@ containers:
   3:
     marker: 12
     spot: vial_C_final_position
-    dxy_mm: [0.78, 4.88]
-    distance_mm: 4.94
-    bearing_deg: 80.96
+    dxy_mm: [21.7, 4.88]
+    distance_mm: 22.24
+    bearing_deg: 12.67
     z_mm: 207.76
     heading_offset_deg: 31.87
     R_tray:
@@ -48,6 +49,8 @@ containers:
     - [0.525791, 0.849299, -0.047272]
     - [0.090069, -0.000326, 0.995936]
     joints: {1: -37.1, 2: 107.8, 3: 38.3, 4: 74.7, 5: -6.4, 6: 0.6}
+    note: 'dx +0.8 -> +21.7 mm: same along-tray offset from its marker as b, which poured into B (2026-10-25 02:01); the taught
+      c pose was ~1 container short'
   4:
     marker: 13
     spot: vial_D_final_position
