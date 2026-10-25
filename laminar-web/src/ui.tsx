@@ -35,7 +35,7 @@ export function useName(): [string, (s: string) => void] {
 }
 
 const STATUS: Record<string, [string, string]> = {
-  checking: ["live", "checking"], rejected: ["bad", "refused"], awaiting_approval: ["warn", "awaiting approval"],
+  checking: ["live", "checking"], rejected: ["bad", "refused"], awaiting_approval: ["reagent", "awaiting approval"],
   approved: ["live", "approved"], running: ["live", "running"], done: ["ok", "done"], aborted: ["bad", "aborted"],
 };
 export function Status({ s }: { s: string }) {

@@ -15,33 +15,36 @@ export default function App() {
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
+  const isConsole = view === "console";
   return (
     <>
-      <header className="bar">
-        <div className="wrap">
-          <a className="mark" href="/">
-            <svg viewBox="0 0 26 14" aria-hidden="true">
-              {[3.4, 7, 10.6].map((y, i) => <path key={y} d={`M1 ${y}c6.2-2.8 12.2 2.8 18.4 0 2.3-1 4-1.6 5.8-2`} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity={[1, 0.5, 0.24][i]} />)}
-            </svg>
-            Laminar
-          </a>
-          {view === "site" && (
+      {!isConsole && (
+        <header className="bar">
+          <div className="wrap">
+            <a className="mark" href="/">
+              <svg viewBox="0 0 26 14" aria-hidden="true">
+                {[3.4, 7, 10.6].map((y, i) => <path key={y} d={`M1 ${y}c6.2-2.8 12.2 2.8 18.4 0 2.3-1 4-1.6 5.8-2`} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity={[1, 0.5, 0.24][i]} />)}
+              </svg>
+              Laminar
+            </a>
             <nav aria-label="Sections">{SITE_NAV.map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}</nav>
-          )}
-          <div className="switch" style={view === "console" ? { marginLeft: "auto" } : undefined}>
-            <a href="/">Project</a>
-            <a href="#console" aria-current={view === "console" ? "page" : undefined} onClick={() => setView("console")}>Console</a>
+            <div className="segmented">
+              <a href="/">Project</a>
+              <a href="#console" aria-current={isConsole ? "page" : undefined} onClick={() => setView("console")}>Console</a>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
       <div id="top" />
-      {view === "site" ? <Site /> : <Console />}
-      <footer>
-        <div className="wrap">
-          <span>Laminar · Cal Hacks 13.0 · Berkeley, October 2026</span>
-          <span>Live state on Convex · history on Tiger Data · planning by Claude</span>
-        </div>
-      </footer>
+      {isConsole ? <Console /> : <Site />}
+      {!isConsole && (
+        <footer>
+          <div className="wrap">
+            <span>Laminar · Cal Hacks 13.0 · Berkeley, October 2026</span>
+            <span>Live state on Convex · history on Tiger Data · planning by Claude</span>
+          </div>
+        </footer>
+      )}
     </>
   );
 }

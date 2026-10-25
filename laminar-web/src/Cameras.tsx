@@ -5,10 +5,7 @@ import { api } from "../convex/_generated/api";
 type Cam = "side" | "wrist";
 const NAME: Record<Cam, string> = { side: "Side camera · tray", wrist: "Wrist camera · on the arm" };
 
-/**
- * One bench camera, live. The frame's JPEG bytes arrive through a Convex live query (robot.liveFrame), pushed over
- * the websocket the page already has open: no polling, no storage URL, no second download.
- */
+/** One live camera tile. 16:9 night surface with Off/Live pill + camera name in the caption row. */
 function LiveCam({ cam }: { cam: Cam }) {
   const f = useQuery(api.robot.liveFrame, { cam });
   const [src, setSrc] = useState<string | null>(null);
@@ -30,19 +27,19 @@ function LiveCam({ cam }: { cam: Cam }) {
   const recent = seen.current.filter((s) => Date.now() - s.at < 3000);
   const fps = recent.length > 1 ? (recent.length - 1) / ((recent.at(-1)!.at - recent[0].at) / 1000) : 0;
   const live = age !== null && age < 3;
-  // Each tile takes the exact shape of the frames the bench sends (the side camera sends a wide strip of the
-  // tray); nothing is cropped. Wide frames get the full row.
   const wide = !!size && size.w / size.h > 2;
   return (
     <figure className={`cam${wide ? " wide" : ""}`}>
-      {src ? (
-        <img src={src} alt={NAME[cam]} style={size ? { aspectRatio: `${size.w} / ${size.h}` } : undefined}
-          onLoad={(e) => { const i = e.currentTarget; if (!size || size.w !== i.naturalWidth || size.h !== i.naturalHeight) setSize({ w: i.naturalWidth, h: i.naturalHeight }); }} />
-      ) : <div className="cam-empty">No frames yet</div>}
+      <div className="cam-image-wrap">
+        {src ? (
+          <img src={src} alt={NAME[cam]}
+            onLoad={(e) => { const i = e.currentTarget; if (!size || size.w !== i.naturalWidth || size.h !== i.naturalHeight) setSize({ w: i.naturalWidth, h: i.naturalHeight }); }} />
+        ) : <div className="cam-empty">No frames yet</div>}
+      </div>
       <figcaption>
         <span className={`chip ${live ? "live" : ""}`}>{live ? `live · ${fps.toFixed(0)} fps` : age === null ? "off" : `${age < 120 ? Math.round(age) + " s" : Math.round(age / 60) + " min"} ago`}</span>
         <span>{NAME[cam]}</span>
-        {size && <span className="mono" style={{ marginLeft: "auto" }}>{size.w}×{size.h}</span>}
+        {size && <span className="mono">{size.w}×{size.h}</span>}
       </figcaption>
     </figure>
   );
