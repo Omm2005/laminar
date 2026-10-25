@@ -548,6 +548,27 @@ def main():
         hold(0.5)
         return f"gripper at {rel(GRIPPER):.1f} (target {target:.1f})"
 
+    def gripper_check():
+        """2026-10-25 11:12: J7 answered in run mode with no fault but applied no torque for a whole session; B2b
+        ran with jaws that never opened or closed. Open the jaws a little and back; if they do not move, reset J7
+        (disable, MIT mode, enable) and try again; refuse to start if it still will not move."""
+        for attempt in range(3):
+            start, frm = rel(GRIPPER), grip["target"]
+            gripper_move(start + 15.0, 40.0)
+            moved = rel(GRIPPER) - start
+            gripper_move(frm, 40.0)
+            if moved > 5.0:
+                print(f"gripper check: jaws opened {moved:.0f} deg and back", flush=True)
+                return
+            print(f"gripper check: J7 did not move ({moved:+.1f} deg): resetting it", flush=True)
+            bus.disable(GRIPPER)
+            time.sleep(0.05)
+            bus.write_param_u8(GRIPPER, P_RUN_MODE, 0)
+            time.sleep(0.02)
+            bus.enable(GRIPPER)
+            hold(0.3)
+        raise RuntimeError("the gripper (J7) does not move: power-cycle the follower")
+
     def grasp(speed, close_torque, hold_torque):
         """Close slowly with a low torque limit; the encoder tells us when the jaws stop on something."""
         grip["limit"], grip["teleop_hold"] = close_torque, False  # grasp sets its own holding torque
@@ -633,6 +654,8 @@ def main():
             raise RuntimeError(f"motors not in run mode after enabling: {idle}")
         hold(max(0.0, startup["until"] - time.time()) + 0.1)   # every motor must be replying before "ready"
         startup["until"] = 0.0
+        if not args.hold_grip:  # never open jaws that hold a vial
+            gripper_check()
         last["result"] = "ready, holding"
         write_status()
         print("arm_server ready", flush=True)

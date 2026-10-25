@@ -350,10 +350,16 @@ def open_camera(index: int):
 
 def grab(cap, settle: int = 1):
     ok, frame = False, None
-    for _ in range(settle):  # the first frames after opening are dark while exposure settles
+    if isinstance(cap, _Stream):
+        # wrist_stream.py reopens the camera after a few missed frames, which takes over a second (stopped a B2b
+        # at 11:13): wait for it to come back
+        t0 = time.time()
+        while not ok and time.time() - t0 < 3.0:
+            ok, frame = cap.read()
+            if not ok:
+                time.sleep(0.05)
+    for _ in range(0 if isinstance(cap, _Stream) else settle):  # the first frames after opening are dark
         ok, frame = cap.read()
-        if isinstance(cap, _Stream):
-            break
     if not ok:
         raise SystemExit("camera returned no frame")
     return frame
