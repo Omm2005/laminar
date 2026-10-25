@@ -37,6 +37,42 @@ LEVEL_HZ = 10.0
 WRIST_HZ = 2.0
 
 
+def take_side_camera(cam: int) -> list[dict]:
+    """Stop any sense/live_view.py that owns side camera `cam` (Windows: one process per camera) and return how to
+    restart it. The dashboard keeps its side frames meanwhile: Watch writes side_latest.jpg the same way."""
+    import psutil
+    stopped = []
+    for p in psutil.process_iter(["pid", "cmdline", "cwd"]):
+        cmd = p.info.get("cmdline") or []
+        if any(c.endswith("live_view.py") for c in cmd) and ("--cam" not in cmd or cmd[cmd.index("--cam") + 1] == str(cam)):
+            stopped.append({"cmdline": cmd, "cwd": p.info.get("cwd") or str(REPO / "sense")})
+            print(f"  side camera {cam}: stopping live_view.py (pid {p.pid}) for the episode, restarted after it")
+            p.terminate()
+            try:
+                p.wait(5)
+            except psutil.TimeoutExpired:
+                p.kill()
+    if stopped:
+        time.sleep(1.0)   # let Windows release the camera
+    return stopped
+
+
+def give_back_side_camera(stopped: list[dict]) -> None:
+    if stopped:
+        time.sleep(1.0)   # the episode's camera has just been released
+    for s in stopped:
+        subprocess.Popen(s["cmdline"], cwd=s["cwd"], creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        print("  live_view.py restarted: " + " ".join(s["cmdline"][1:]))
+
+
+def wrist_stream_running(max_age_s: float = 1.0) -> bool:
+    """A wrist_stream.py is already writing frames (the dashboard's): read those instead of starting another."""
+    try:
+        return time.time() - T.STREAM_FILE.stat().st_mtime < max_age_s
+    except OSError:
+        return False
+
+
 class Watch:
     """The side camera's levels and the wrist camera's frames, logged in the background, tagged by phase."""
 
@@ -253,11 +289,25 @@ def main() -> None:
     out.mkdir(parents=True)
     print(f"logging to {out.relative_to(HERE)}")
 
-    stream = subprocess.Popen([sys.executable, str(HERE / "wrist_stream.py"), "--camera", str(a.wrist_cam)])
-    watch = Watch(out, a.side_cam, a.seg_model)
+    # share the cameras with the dashboard (publish.py reads wrist_latest.jpg / side_latest.jpg / arm_status.json):
+    # reuse a running wrist stream, borrow the side camera from live_view.py and give it back afterwards
+    own_stream = not wrist_stream_running()
+    stream = subprocess.Popen([sys.executable, str(HERE / "wrist_stream.py"), "--camera", str(a.wrist_cam)])         if own_stream else None
+    if not own_stream:
+        print("  wrist camera: using the wrist_stream.py already running (dashboard feed)")
+    borrowed = take_side_camera(a.side_cam)
+    try:
+        watch = Watch(out, a.side_cam, a.seg_model)
+    except BaseException:
+        if stream:
+            stream.terminate()
+        give_back_side_camera(borrowed)
+        raise
     if column not in watch.targets:
         watch.stop()
-        stream.terminate()
+        if stream:
+            stream.terminate()
+        give_back_side_camera(borrowed)
         raise SystemExit(f"no level box {column} for container {a.job[-1]}: boxes are {', '.join(watch.targets)}")
     time.sleep(2.0)
     record: dict = {"job": a.job, "column": column, "target": a.target, "start": watch.snapshot()}
@@ -276,7 +326,9 @@ def main() -> None:
         record["error"] = err
         record["phases"] = watch.phases
         watch.stop()
-        stream.terminate()
+        if stream:
+            stream.terminate()
+        give_back_side_camera(borrowed)
         (out / "summary.json").write_text(json.dumps(record, indent=2))
         print(f"episode {'STOPPED: ' + err if err else 'done'}; logs in {out.relative_to(HERE)}")
 
