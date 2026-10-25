@@ -318,10 +318,19 @@ class _Stream:
     """Frames from wrist_stream.py (it owns the camera; Windows allows one process per camera)."""
 
     def read(self):
-        if time.time() - STREAM_FILE.stat().st_mtime > 1.0:
-            return False, None
-        frame = cv2.imread(str(STREAM_FILE))
-        return frame is not None, frame
+        # the stream replaces the file ~30 times a second: a read can land mid-replace (missing or partial file),
+        # which stopped an A2b at 06:57. Retry briefly.
+        for _ in range(20):
+            try:
+                if time.time() - STREAM_FILE.stat().st_mtime > 1.0:
+                    return False, None
+                frame = cv2.imread(str(STREAM_FILE))
+            except OSError:
+                frame = None
+            if frame is not None:
+                return True, frame
+            time.sleep(0.01)
+        return False, None
 
     def release(self):
         pass

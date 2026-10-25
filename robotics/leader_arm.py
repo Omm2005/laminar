@@ -61,10 +61,21 @@ class LeaderArm:
     def read_raw(self):
         """Raw servo angles in degrees, {servo_id: deg}. Raises if any servo is missing."""
         result = self.bus.sync_monitor(self.ids)
-        missing = [i for i in self.ids if result.get(i) is None]
-        if missing:
-            raise RuntimeError(f"no reading from leader servos {missing}")
-        return {i: result[i].angle_deg for i in self.ids}
+        out = {}
+        for i in self.ids:
+            m = result.get(i)
+            if m is not None and m.reliable:
+                out[i] = m.angle_deg
+                continue
+            # servos 1 and 2 (shoulder, elbow) answer the sync read only ~1 time in 30: the driver then repeats the
+            # last angle, so J2/J3 updated at ~8 Hz and jumped (2026-10-25). A direct read answers every time.
+            try:
+                out[i] = self.bus.read_angle(i).raw_deg
+            except Exception:
+                if m is None:
+                    raise RuntimeError(f"no reading from leader servo {i}") from None
+                out[i] = m.angle_deg
+        return out
 
     def read_follower_targets(self):
         """Leader pose as follower targets: {follower motor id: degrees relative to follower zero pose}."""

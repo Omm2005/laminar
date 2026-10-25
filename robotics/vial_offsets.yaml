@@ -1,7 +1,10 @@
 # Per-vial pour corrections, tray frame (x = along the tray, marker 10 -> 13; y = across), mm, added to the
 # container's offset (container_offsets.yaml) by deliver.pour_pose. Each vial sits in the jaws a little differently.
 vials:
+  vial_A:
+    dxy_mm: [20.3, 0.0]
+    note: "A2b 07:08 (hand-taught poses ~200 mm high): the stream landed 2 channels towards a (x2), then 1 (x3) after
+      +10.1; +20.3 is the aim correction that run ended on"
   vial_B:
     dxy_mm: [0.0, 0.0]
-    note: "was [-10.2, 0] (B2b 02:25 poured one channel towards c, old teleop-taught pose). With the hand-taught
-      poses (06:0x) B2b 06:37 poured one channel LEFT, into x2, so the correction is off."
+    note: "was [-10.2, 0] (old teleop-taught pose); with the hand-taught poses it poured one channel LEFT"

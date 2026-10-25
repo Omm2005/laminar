@@ -95,6 +95,8 @@ def learn_offsets(pose: dict) -> dict:
             "heading_offset_deg": round((heading - th + 180.0) % 360.0 - 180.0, 2),
             "R_tray": [[round(float(v), 6) for v in row] for row in T.yaw(-th) @ R],
             "joints": {j: round(float(q[j]), 2) for j in range(1, 7)},
+            # final positions are now taught by hand with the motors off (encoders = the true tip height)
+            "extra_lower_mm": 0.0,
         }
     return out
 
@@ -188,6 +190,9 @@ MAX_PITCH_GIVE_DEG = 20.0
 PITCH_COST = 1.5               # 1 deg of pitch counts like 1.5 deg of heading when choosing the closest pose
 POUR_ROLL_ROOM_DEG = 30.0      # the pour joints must leave J6 at least this much room to roll either way
 J4_MARGIN_DEG = 0.5            # ... and keep J4 this far inside its limits (taught: 89.1 of 90)
+MIN_POUR_REACH_DEG = 110.0     # ... and the all-joint pour tilt (pour_tilt.best_pour_start, turn path included)
+#                                must reach this far from it: A2b 06:58 got a pose with J4 at 89 whose pour could
+#                                only tilt 3 deg without a turn, and the turn that reached further was unreachable
 
 
 def _ry(deg: float) -> np.ndarray:
@@ -202,7 +207,15 @@ def _pour_ok(q) -> bool:
             and lo4 + J4_MARGIN_DEG <= q[4] <= hi4 - J4_MARGIN_DEG)
 
 
-def reachable_pour(p, R, seed) -> tuple[np.ndarray, dict]:
+def _pour_reaches(q, toward) -> bool:
+    if toward is None:
+        return True
+    import pour_tilt as PT
+    best = PT.best_pour_start(q, toward, want=MIN_POUR_REACH_DEG)
+    return best is not None and (len(best[2]) - 1) * PT.TILT_STEP_DEG >= MIN_POUR_REACH_DEG
+
+
+def reachable_pour(p, R, seed, toward=None) -> tuple[np.ndarray, dict]:
     """(orientation, joints) for the pour pose at tip p: R itself when the arm reaches it, else the closest
     reachable orientation (smallest heading turn + PITCH_COST x pitch, see above) with J6 free to roll for the pour.
     Raises PlanError if nothing within MAX_HEADING_GIVE_DEG / MAX_PITCH_GIVE_DEG reaches."""
@@ -217,7 +230,7 @@ def reachable_pour(p, R, seed) -> tuple[np.ndarray, dict]:
             s.update({j: s[j] + d for j, d in dq.items()})
             q, pe, ae = M.ik(s, p, Rg)
             q = dict(q)
-            if pe <= M.POS_TOL_MM and ae <= M.ANG_TOL_DEG and _pour_ok(q):
+            if pe <= M.POS_TOL_MM and ae <= M.ANG_TOL_DEG and _pour_ok(q) and _pour_reaches(q, toward):
                 if g or b:
                     print(f"  pour pose: the exact orientation is out of reach here; closest reachable: gripper "
                           f"turned {g:+.1f} deg about vertical, vial pitched {b:+.1f} deg along the gripper")
@@ -226,12 +239,12 @@ def reachable_pour(p, R, seed) -> tuple[np.ndarray, dict]:
                       f"heading within +-{MAX_HEADING_GIVE_DEG:g} deg and pitch within +-{MAX_PITCH_GIVE_DEG:g} deg")
 
 
-def plan_pour_carry(vial: str, p, R, seed) -> tuple[list, dict, dict]:
+def plan_pour_carry(vial: str, p, R, seed, toward=None) -> tuple[list, dict, dict]:
     """[lift, travel, lower, turn] from the vial's grasp pose to the pour pose (p, R), the grasp joints and the pour
     joints. Lift and travel keep the vial as upright as it was grabbed (travel turns it only about vertical, to the
     pour pose's heading); after the lower, `turn` blends in place into the exact pour orientation (a few degrees)."""
     qa = {j: v for j, v in load(vial)["initial_position"].items() if j <= 6}
-    R, qb = reachable_pour(p, R, seed)
+    R, qb = reachable_pour(p, R, seed, toward)
     pa, Ra = M.fk_mm(qa)
     Rd = R @ Ra.T  # the grasp orientation turned about vertical to the pour pose's heading
     yw = math.degrees(math.atan2(Rd[1, 0] - Rd[0, 1], Rd[0, 0] + Rd[1, 1]))
@@ -320,7 +333,7 @@ def main(argv=None) -> None:
         print(f"{vial} -> container {'abcd'[cont - 1]} ({cont}): pour pose ({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f}) mm, "
               f"tray heading {pose['heading_deg']:.1f} deg, seen from markers {pose['seen']}")
         try:
-            moves, q_grasp, q_pour = plan_pour_carry(vial, p, R, seed)
+            moves, q_grasp, q_pour = plan_pour_carry(vial, p, R, seed, into_tray(pose))
         except M.PlanError as e:
             raise SystemExit(f"NOT MOVING: {e}") from None
         for mv in moves:

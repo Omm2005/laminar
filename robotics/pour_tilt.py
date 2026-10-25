@@ -78,6 +78,12 @@ def best_pour_start(q, toward_xy, want: float = WANT_TILT_DEG, tries=HEADING_TRI
             if pe > M.POS_TOL_MM or ae > M.ANG_TOL_DEG:
                 continue
             qg = dict(qg)
+            # the turned pose being reachable is not enough: the turn itself must be (A2b 06:58 picked +60 deg,
+            # whose end was fine but whose path ran into J4's limit halfway, and stopped with the vial over b)
+            try:
+                M.plan_turn(q, M.fk_mm(qg)[1], label="turn to the pour heading")
+            except M.PlanError:
+                continue
         else:
             qg = dict(q)
         table = plan_tilt_table(qg, toward_xy)
