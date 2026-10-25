@@ -1,17 +1,14 @@
-"""Keep the bench up: arm_server.py, publish.py and bench_runner.py always running. python keep_running.py
+"""Bring up the bench when the dashboard has work: python keep_running.py
 
-Every few seconds it checks that each script has a running python process (started from anywhere: copies already
-running are adopted, never restarted) and starts any that is missing, from this folder, in its own console window
-(so you can watch it and Ctrl+C it; Ctrl+C there only restarts it, see below).
+Every few seconds it asks the website whether an approved run is waiting (GET /bench/next: a read, it does not take
+the run) and whether a run is going on here (pour_episode.py running). While there is work, it makes sure
+arm_server.py, publish.py and bench_runner.py are all running and starts any that is missing (arm_server first,
+each in its own console window). With no work it starts nothing: scripts that stop (arm_server exits after 15 min
+idle, a `rest`, or a safety stop) stay stopped until the next approved run. Copies already running are adopted,
+never restarted. A script that dies within a minute of starting is retried after 5, 15, 30, 60, 120 s.
 
-    arm_server.py    exits by design: idle for 15 min, a `rest` command, or a safety stop (lost feedback / fault /
-                     overheating, after easing to rest). It is started again; a safety stop that repeats quickly
-                     backs off (it may be the CAN adapter, which then needs a replug).
-    publish.py       cameras + joints to the dashboard.
-    bench_runner.py  takes the dashboard's approved runs (they start on their own).
-
-To stop everything for good: create robotics/KEEP_RUNNING_OFF (nothing is restarted while it exists), then close the
-windows; or close this window first. Logs: robotics/logs/keep_running.log.
+To stop it for good: create robotics/KEEP_RUNNING_OFF (nothing is started while it exists), or close this window.
+Log: robotics/logs/keep_running.log. Needs BENCH_TOKEN like publish.py.
 """
 from __future__ import annotations
 
@@ -21,6 +18,10 @@ import time
 from pathlib import Path
 
 import psutil
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_runner import Site  # noqa: E402
+from publish import SITE, env_token  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = ["arm_server.py", "publish.py", "bench_runner.py"]
@@ -62,9 +63,24 @@ def start(script: str) -> int:
     return p.pid
 
 
+def work_waiting(site) -> bool:
+    """An approved run is waiting on the website, or a run is going on here."""
+    if running("pour_episode.py"):
+        return True
+    try:
+        return site.next() is not None
+    except Exception:                    # website unreachable: start nothing new, leave what runs alone
+        return False
+
+
 def main() -> int:
+    token = env_token(HERE)
+    if not token:
+        print("no BENCH_TOKEN: put BENCH_TOKEN=... in the repo's .env (same as publish.py)")
+        return 1
+    site = Site(SITE, token)
     state = {s: {"started": 0.0, "fails": 0, "next": None} for s in SCRIPTS}
-    log(f"keep_running: watching {', '.join(SCRIPTS)} (create {OFF.name} to pause restarts)")
+    log(f"keep_running: starts {', '.join(SCRIPTS)} when an approved run is waiting (create {OFF.name} to pause)")
     for s in SCRIPTS:
         pids = running(s)
         if pids:
@@ -80,6 +96,11 @@ def main() -> int:
         if paused:
             log(f"{OFF.name} removed: watching again")
             paused = False
+        if not work_waiting(site):
+            for st in state.values():
+                st["next"], st["started"], st["fails"] = None, 0.0, 0     # next time, start right away
+            time.sleep(CHECK_S)
+            continue
         now = time.time()
         for s in SCRIPTS:
             st = state[s]
