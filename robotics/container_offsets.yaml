@@ -1,0 +1,61 @@
+# Pour poses relative to each container's ArUco marker, learned by `python deliver.py learn-offsets`.
+# Tray frame: origin = the marker centre, x = along the tray line (marker 10 -> 13), mm and degrees.
+learned: '2026-10-24 23:06:10'
+tray_at_learn:
+  xy_mm: [374.2, 330.29]
+  heading_deg: 5.25
+  rms_mm: 2.86
+  seen: [10, 11, 12, 13]
+containers:
+  1:
+    marker: 10
+    spot: vial_A_final_position
+    dxy_mm: [18.1, -2.57]
+    distance_mm: 18.28
+    bearing_deg: -8.09
+    z_mm: 199.68
+    heading_offset_deg: -4.28
+    R_tray:
+    - [0.990191, 0.070598, -0.120569]
+    - [-0.074159, 0.996925, -0.025301]
+    - [0.118412, 0.033994, 0.992382]
+    joints: {1: -65.5, 2: 119.4, 3: 45.8, 4: 89.1, 5: -63.7, 6: 12.0}
+  2:
+    marker: 11
+    spot: vial_B_final_position
+    dxy_mm: [18.16, -2.55]
+    distance_mm: 18.34
+    bearing_deg: -7.99
+    z_mm: 203.9
+    heading_offset_deg: -4.34
+    R_tray:
+    - [0.986155, 0.064509, -0.152765]
+    - [-0.074791, 0.995236, -0.062539]
+    - [0.148003, 0.073099, 0.986282]
+    joints: {1: -61.2, 2: 122.7, 3: 50.5, 4: 89.0, 5: -59.2, 6: 10.3}
+  3:
+    marker: 12
+    spot: vial_C_final_position
+    dxy_mm: [9.74, -7.9]
+    distance_mm: 12.54
+    bearing_deg: -39.04
+    z_mm: 204.83
+    heading_offset_deg: -4.92
+    R_tray:
+    - [0.984548, 0.07243, -0.159431]
+    - [-0.084677, 0.993847, -0.071404]
+    - [0.153279, 0.0838, 0.984623]
+    joints: {1: -58.3, 2: 124.4, 3: 54.0, 4: 86.7, 5: -56.9, 6: 8.9}
+  4:
+    marker: 13
+    spot: vial_D_final_position
+    dxy_mm: [2.8, -4.63]
+    distance_mm: 5.41
+    bearing_deg: -58.79
+    z_mm: 211.3
+    heading_offset_deg: -4.45
+    R_tray:
+    - [0.980722, 0.066214, -0.183847]
+    - [-0.076379, 0.995886, -0.048761]
+    - [0.179862, 0.061863, 0.981745]
+    joints: {1: -55.6, 2: 127.0, 3: 58.7, 4: 85.9, 5: -53.5, 6: 10.7}
