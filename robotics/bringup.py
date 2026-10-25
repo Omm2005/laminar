@@ -1,9 +1,9 @@
 """Bring the arm up reliably, retrying the whole CAN side when it misbehaves: python bringup.py [--tries 3]
 
 Each try:
-    1. stop any arm_server.py
-    2. reset the CAN side: open the USB-CAN adapter fresh, switch every motor off (disable with fault clear, run
-       mode 0), close the adapter, wait
+    1. stop any arm_server.py, wait for Windows to release the USB-CAN adapter
+    2. (arm_server.py itself resets the CAN side when it starts: every motor disabled, run mode 0, enabled again;
+       reset_can() below does it separately but is not used here: opening the adapter twice in a row wedged it)
     3. start arm_server.py (log: logs/arm_server.log) and wait for "arm_server ready"
     4. check it: feedback stays live for HEALTHY_S, and the gripper really opens and closes
 A failure anywhere (lost feedback, a gripper that doesn't move, the server exiting) -> stop it, motors off, wait,
@@ -138,7 +138,10 @@ def main() -> int:
         print(f"bring-up try {k}/{a.tries}")
         stop_servers()
         try:
-            reset_can()
+            # arm_server resets the motors itself at startup (disable, run mode 0, enable). Opening the adapter here
+            # first and closing it right before arm_server opens it crashed libusb and wedged the adapter
+            # ("access violation", then "access denied" until replugged), so only the server opens it.
+            time.sleep(SETTLE_S)
             p = start_server()
             check(p)
             print("arm_server.py is running and healthy (log: logs/arm_server.log)")
@@ -147,6 +150,11 @@ def main() -> int:
             raise
         except Exception as e:  # noqa: BLE001 - any failure = stop, motors off, wait, next try
             print(f"  FAILED: {e!r}" if not isinstance(e, RuntimeError) else f"  FAILED: {e}")
+            if any(w in str(e).lower() for w in ("access denied", "access violation", "cannot find device")):
+                print("the USB-CAN adapter is wedged or gone: unplug its USB, wait 5 s, plug it back in, then run "
+                      "this again (retrying now cannot free it)")
+                stop_servers()
+                return 1
             stop_servers()
             time.sleep(SETTLE_S)
     print("every bring-up try failed. If it says the adapter would not open / access denied / access violation, the "
