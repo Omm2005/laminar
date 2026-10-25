@@ -80,11 +80,13 @@ What the arm does from the camera:
 
 | Camera sees | Arm |
 | --- | --- |
-| nothing flowing | tilts more (15 deg/s) |
+| nothing flowing | tilts more: 15 deg/s to 40 deg, then 6 deg/s so it doesn't overshoot the first drop |
+| a first small rise | keeps the angle up to 1 s to see if it becomes flow |
 | filling slower than allowed for this fill level | tilts more, gently |
 | filling too fast | slows down / tilts back |
 | target close (fill x rate x 0.3 s lag) | tilts back upright: done |
-| a neighbour rises, rim reached, camera unsure 1 s, no flow 2 s at max tilt | aborts, tilts back, says LEFT/RIGHT |
+| a neighbour rises, rim reached, camera unsure 1 s | aborts, tilts back, says LEFT/RIGHT |
+| no flow after waiting 5 s AT max tilt (longer while a trickle is still rising) | aborts, says whether the camera saw any rise |
 
 Motion only, no liquid: `pour right --sim --real-motor` (real wrist, simulated liquid).
 
