@@ -320,7 +320,12 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
                     lines += _results_lines(r)
                 await reply("\n".join(lines))
             return
-        asked = await call("mutation", "remote:ask", {"sender": sender, "text": text, "label": st["label"], "via": st["via"]})
+        session = str(ctx.session)                                   # a new chat (ASI:One): the assistant starts fresh
+        new = session != st.get("session") or time.time() - st.get("last_ask", 0) > 600   # or 10 min quiet
+        st["session"], st["last_ask"] = session, time.time()
+        _save(ctx, sender, st)
+        asked = await call("mutation", "remote:ask", {"sender": sender, "text": text, "label": st["label"],
+                                                      "via": st["via"], "newSession": new})
         if person:
             await reply(await answer(sender, asked["at"]))         # one reply per message, like ASI:One expects
         # agents: the assistant's reply arrives in the thread and relay() sends it on, with machine-readable events

@@ -153,6 +153,7 @@ export default defineSchema({
     via: v.string(),                            // "asi-one" | "agent"
     createdAt: v.number(),
     lastSeenAt: v.number(),
+    sessionStart: v.optional(v.number()),       // the current conversation began here: the assistant reads from it
   }).index("by_thread", ["threadId"]),
 
   messages: defineTable({

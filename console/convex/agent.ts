@@ -354,7 +354,8 @@ export const chat = internalAction({
         }
       } else {
         const client = new Anthropic({ apiKey: key });
-        const history = (await ctx.runQuery(internal.messages.listInternal, { threadId: args.threadId, limit: 30 }))
+        const history = (await ctx.runQuery(internal.messages.listInternal,
+                                            { threadId: args.threadId, limit: 30, since: remote?.sessionStart }))
           .filter((m) => m.role !== "tool" && m.text)
           .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), content: m.text }));
         const messages: Anthropic.Beta.BetaMessageParam[] = mergeRoles(history);

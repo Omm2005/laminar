@@ -26,14 +26,17 @@ async function remoteJob(ctx: QueryCtx, sender: string, jobId: string): Promise<
 
 /** A request (or any chat message) from another lab's agent. The assistant answers in the sender's thread. */
 export const ask = mutation({
-  args: { sender: v.string(), text: v.string(), label: v.optional(v.string()), via: v.optional(v.string()) },
+  args: { sender: v.string(), text: v.string(), label: v.optional(v.string()), via: v.optional(v.string()),
+          newSession: v.optional(v.boolean()) },   // a new conversation (e.g. a new ASI:One chat): start fresh
   handler: async (ctx, a) => {
     const threadId = threadOf(a.sender);
     const now = Date.now();
     const r = await ctx.db.query("remotes").withIndex("by_thread", (q) => q.eq("threadId", threadId)).first();
     const label = a.label?.trim() || r?.label || `agent ${a.sender.slice(0, 16)}…`;
-    if (r) await ctx.db.patch(r._id, { label, via: a.via ?? r.via, lastSeenAt: now });
-    else await ctx.db.insert("remotes", { threadId, sender: a.sender, label, via: a.via ?? "agent", createdAt: now, lastSeenAt: now });
+    const session = a.newSession || !r ? { sessionStart: now } : {};
+    if (r) await ctx.db.patch(r._id, { label, via: a.via ?? r.via, lastSeenAt: now, ...session });
+    else await ctx.db.insert("remotes", { threadId, sender: a.sender, label, via: a.via ?? "agent", createdAt: now,
+                                          lastSeenAt: now, ...session });
     await ctx.db.insert("messages", { threadId, role: "user", text: a.text, createdAt: now });
     await ctx.scheduler.runAfter(0, internal.agent.chat, { threadId, userMessage: a.text });
     return { threadId, at: now };

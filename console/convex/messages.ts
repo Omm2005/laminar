@@ -14,12 +14,14 @@ export const list = query({
   },
 });
 
+/** The thread's LATEST messages (up to limit), oldest first, optionally only those from `since` (ms) on. */
 export const listInternal = internalQuery({
-  args: { threadId: v.string(), limit: v.optional(v.number()) },
+  args: { threadId: v.string(), limit: v.optional(v.number()), since: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    return await ctx.db.query("messages")
-      .withIndex("by_thread_t", (q) => q.eq("threadId", args.threadId))
-      .order("asc").take(args.limit ?? 60);
+    const rows = await ctx.db.query("messages")
+      .withIndex("by_thread_t", (q) => q.eq("threadId", args.threadId).gte("createdAt", args.since ?? 0))
+      .order("desc").take(args.limit ?? 60);
+    return rows.reverse();
   },
 });
 
