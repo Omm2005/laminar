@@ -145,7 +145,7 @@ python -m laminar.tiger init          # tables, aggregates, policies (safe to re
 python -m laminar.tiger backfill      # logs/telemetry.jsonl
 python -m laminar.tiger arm           # sample robotics/arm_status.json while arm_server runs
 python -m laminar.tiger report        # recent runs, pours, per-joint tracking from the aggregates
-python -m laminar.tiger run --name "vial A" -- python ../robotics/transfer.py vial_A well_3   # log a run
+python -m laminar.tiger run --name "A2c" -- python ../robotics/transfer.py vial_A well_3   # log a run: Chemical A into container c
 python -m laminar.tiger smooth        # per-joint tracking error, jerk, stick-slip for the last run
 python -m laminar.tiger import ../robotics/recordings/<episode>   # a teleop recording as a run
 ```

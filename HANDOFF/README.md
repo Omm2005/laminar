@@ -24,6 +24,15 @@ last teleop teaching of pour poses looks inconsistent. The user wants "A2b and B
 anywhere". Next step that was about to run: a C2a **dry run** (no liquid) to check the newly taught pose for container
 a, then finish the wrist-camera alignment (`robotics/servo.py`) which needs "look poses" taught.
 
+## Naming (use these words)
+
+* **container a, b, c, d**: the 4 pour containers, ArUco markers 10-13. The code calls them container 1-4 /
+  `well_1`..`well_4`.
+* **Chemical A, B, C, D**: the liquids. Each one is in the vial with its letter (`vial_A`..`vial_D`, slots `slot_A`..`slot_D`).
+* **Standard layout:** Chemical A goes into container a, B into b, C into c and D into d (the default when not
+  told). Other pairings are fine when asked: job `A2b` = Chemical A into container b.
+* The side camera's columns A-D in `layout.yaml` are container columns, not chemicals.
+
 ## Where things are on disk
 
 * `C:\Users\amogh\Downloads\laminar-main` - **the working copy** (git worktree of `main`). All robotics runs and all

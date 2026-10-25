@@ -2,6 +2,23 @@
 arm.py (MotorBridge driver), IK, S-curve, pose-save script, bench.yaml, pick/carry/place, pour controller, abort handling.
 
 Windows follower driver, leader-arm teleop, recording and the scripted arm server (Amogh): see [TELEOP.md](TELEOP.md).
+
+## Naming: containers a-d, chemicals A-D
+
+Say **container a, b, c, d** for the four pour containers and **Chemical A, B, C, D** for the liquids. Each chemical
+sits in the vial with its letter. The code still uses its own ids:
+
+| Say | Code id | Where |
+| --- | --- | --- |
+| container a / b / c / d | `well_1` / `well_2` / `well_3` / `well_4`, container 1-4, ArUco marker 10 / 11 / 12 / 13 | `spots.yaml`, `layout.yaml`, `transfer.py`, `vision.py`, `deliver.py` |
+| Chemical A / B / C / D | the vial it is in: `vial_A` / `vial_B` / `vial_C` / `vial_D`, grabbed from `slot_A`..`slot_D` | `grab.py`, `paths/`, `spots.yaml` |
+
+**Standard layout:** Chemical A goes into container a, B into b, C into c and D into d. That is the default when a
+request doesn't say. Other pairings are allowed when asked: a job named `A2b` pours Chemical A into container b.
+
+"Compartment" in older text means a container. The side camera's columns in `layout.yaml` (`pour.columns`) are also
+lettered A-D, but column A is container a's column, not Chemical A.
+
 ## Shared moves: lift, lower, travel
 
 Every task is: recorded grab → `lift(100)` → shift `(dx, dy)` in that locked horizontal plane → `lower(60)` →
@@ -14,7 +31,7 @@ The only bench measurements are the 2-D distances from each vial to each compart
 ```
 cd software && python -m laminar.pour_motor6 calibrate --cam 2   # once: side camera, column boxes, % marks
 cd robotics
-python transfer.py vial_A well_2                              # plan the six moves and print them
+python transfer.py vial_A well_2                              # Chemical A into container b: plan the six moves and print them
 python transfer.py vial_A well_2 --cam 2 --run                # run, camera pour to 90 % of full
 python transfer.py vial_A well_2 --pour fixed --tilt 80 --hold 3 --run   # no camera: fixed tilt
 ```
@@ -36,7 +53,7 @@ The return trip ends where the grab ended, within 1 mm.
 | `arm_client.py` | Sends a planned path to `arm_server.py` (`mode="path"`, continuous, default; `mode="moves"` fallback) and streams live pour-roll targets. |
 | `layout.yaml` | 2-D offsets (mm) from each vial to each compartment, lift/lower heights, pour roll direction. |
 | `transfer.py` | The full round trip with the camera pour (above). |
-| `spots.py` / `spots.yaml` | Taught poses: `slot_A..D` (where each grab ends) and `well_1..4` (pour-ready pose over each well). |
+| `spots.py` / `spots.yaml` | Taught poses: `slot_A..D` (where each grab ends) and `well_1..4` (pour-ready pose over containers a-d). |
 | `move.py` | CLI: plan, run, teach spots. |
 | `tests/` | `test_motion.py`: straightness, height, orientation, speed caps, refusals. `test_transfer.py`: flat shifts, round trip back onto the grab pose, layout parsing, roll limit, pour_motor6 on the tilt stream with simulated liquid. `python -m pytest -q tests` |
 
@@ -64,7 +81,7 @@ Start `arm_server.py` first (see [TELEOP.md](TELEOP.md)). Everything plans and p
 ```
 cd robotics
 python move.py from-recording slot_A recordings/<grab_A run>/data.csv   # slot_A = last pose of grab A
-python move.py teach well_1            # jog the arm (tube in hand, upright, lowered over well 1), then save
+python move.py teach well_1            # jog the arm (tube in hand, upright, lowered over container a), then save
 python move.py lift 100                # plan only
 python move.py lift 100 --run          # move
 python move.py travel well_1 --lower-next 60 --run
@@ -87,9 +104,9 @@ for p in paths:
 
 ### Heights must agree
 
-Travel never changes height, so `lift(100)` from a slot then `lower(60)` reaches a well only if the well's
+Travel never changes height, so `lift(100)` from a slot then `lower(60)` reaches a container only if the container's
 taught pose is 40 mm higher than the slot pose. `--lower-next 60` (or `height_offset_mm=60`) prints the
-mismatch; fix it by re-teaching the well pose or changing the lower distance.
+mismatch; fix it by re-teaching the container pose or changing the lower distance.
 
 ### Continuous playback: arm_server.py `path` and `tilt_stream` ops
 
@@ -107,7 +124,7 @@ updates stop, then returns the joint to `base`. `mode="moves"` is still there as
 ## Vision: finding the containers
 
 `vision.py` finds the 4 pour containers wherever the judges put them, with the wrist camera. Each container sits on a
-flat card with its own ArUco marker (DICT_4X4_50, ids 10-13 = containers 1-4, 40 mm) lying flat beside it. The arm
+flat card with its own ArUco marker (DICT_4X4_50, ids 10-13 = containers a-d, 40 mm) lying flat beside it. The arm
 goes to one fixed **scan pose** (high, camera straight down); there the camera is effectively a fixed overhead camera,
 so pixels map to the table through a homography, calibrated once by touching the 4 markers with the gripper tip. If a
 marker is out of view, only the base (J1) sweeps (-40, -20, 0, +20, +40 deg) and the result is rotated back about the
@@ -127,7 +144,7 @@ python vision.py calib-table --run        # guided: jog to the scan pose (Enter)
                                           # corners of their area, touch each marker centre with the gripper tip
                                           # (Enter x4), then it returns to the scan pose and takes the photo
 python vision.py check-sweep --run        # optional: same marker seen at two base angles should agree < 2 mm
-python vision.py teach-well well_1 --run  # per container: scan, then jog to the pour pose (tube held, tilted to a
+python vision.py teach-well well_1 --run  # per container (well_1 = a): scan, then jog to the pour pose (tube held, tilted to a
                                           # typical pour angle, lip over the container) and press Enter
 ```
 
@@ -155,7 +172,7 @@ dets = V.scan(client, run=True)                              # do this BEFORE th
 q = client.current_joints()
 lift = M.plan_lift(q, 100)
 _, R_carry = M.fk_mm(lift.final_joints)                      # the tube's carry orientation
-target = V.well_target("well_2", dets, R_carry=R_carry)      # {"xy_mm": [x, y], "R": 3x3}, safety-checked
+target = V.well_target("well_2", dets, R_carry=R_carry)      # container b: {"xy_mm": [x, y], "R": 3x3}, safety-checked
 travel = M.plan_travel(lift.final_joints, target)
 lower = M.plan_lower(travel.final_joints, 60)
 for p in (lift, travel, lower):
