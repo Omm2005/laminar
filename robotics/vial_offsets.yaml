@@ -2,9 +2,9 @@
 # container's offset (container_offsets.yaml) by deliver.pour_pose. Each vial sits in the jaws a little differently.
 vials:
   vial_A:
-    dxy_mm: [20.3, 0.0]
-    note: "A2b 07:08 (hand-taught poses ~200 mm high): the stream landed 2 channels towards a (x2), then 1 (x3) after
-      +10.1; +20.3 is the aim correction that run ended on"
+    dxy_mm: [10.2, 0.0]
+    note: "+20.3 from A2b 07:08 (no sag hold); with the general sag hold (07:44) that landed one channel towards d
+      (x4) and -10.1 poured into b: +10.2"
   vial_B:
     dxy_mm: [0.0, 0.0]
     note: "was [-10.2, 0] (old teleop-taught pose); with the hand-taught poses it poured one channel LEFT"
