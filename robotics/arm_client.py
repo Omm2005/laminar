@@ -168,14 +168,14 @@ class ArmClient:
         return {"result": "dry run"} if self.dry_run else self.wait_idle()
 
     def start_table_tilt(self, table: list[dict[int, float]], step_deg: float, max_rate_deg_s: float = 30.0,
-                         joint_rate_deg_s: float = 45.0, timeout_s: float = 0.5) -> None:
+                         joint_rate_deg_s: float = 45.0, timeout_s: float = 0.5, tip_hold: bool = True) -> None:
         """Hand the pour tilt to arm_server: J1-J6 per step_deg of tilt; then set_tilt(deg) streams the angle and
         end_tilt_stream() tilts back and ends it."""
         self._tilt_seq = 0
         self._write_atomic(TILT_FILE, {"seq": -1, "deg": 0.0, "done": False})
         self._send({"op": "table_tilt", "table": [[round(r[j], 4) for j in range(1, 7)] for r in table],
                     "step_deg": step_deg, "max_rate_deg_s": max_rate_deg_s, "joint_rate_deg_s": joint_rate_deg_s,
-                    "timeout_s": timeout_s}, wait=False)
+                    "timeout_s": timeout_s, "tip_hold": tip_hold}, wait=False)
 
     def start_pose_stream(self, max_rate_deg_s: float = 60.0, timeout_s: float = 0.5) -> dict[int, float]:
         """Hand J1-J6 to set_pose(). Returns the start pose (degrees): where the arm goes back when the stream ends."""

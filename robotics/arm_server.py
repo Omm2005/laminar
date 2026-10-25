@@ -33,6 +33,8 @@ import os
 import sys
 import time
 
+import numpy as np
+
 from leader_arm import HERE, MAPPING, load_follower_zero
 from robstride_can import boost_process, JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 import arm_trace  # 100 Hz cmd/pos/vel/torque trace for Tiger (trajectory analysis)
@@ -77,6 +79,10 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
+TIP_HOLD_EVERY = 5            # table_tilt tip hold: correct every 5 ticks (20 Hz)
+TIP_HOLD_TAU_S = 0.4          # ... closing the measured tip error with this time constant
+TIP_HOLD_MAX_MM = 60.0        # ... never shifting the commanded tip further than this (sag seen: 30-40 mm)
+TIP_HOLD_MAX_JOINT_DEG = 15.0  # ... nor any joint further than this from the table
 REST_TOL_DEG = 10.0   # a joint further than this from 0 is not at rest
 STARTUP_FEEDBACK_S = 1.0   # right after enabling, a motor's first reply can be late: no lost-feedback stop yet
 # Lost feedback never drops the arm: hold the commanded pose with torque for FEEDBACK_GRACE_S waiting for it to come
@@ -372,7 +378,7 @@ def main():
             vel[m] += max(-dv, min(dv, want - vel[m]))
             cmd[m] = clamp(m, cmd[m] + vel[m] * dt)
 
-    def table_tilt(table, step_deg, max_rate, joint_rate, timeout_s):
+    def table_tilt(table, step_deg, max_rate, joint_rate, timeout_s, tip_hold=True):
         """The all-joint pour tilt: joints = table interpolated at a smoothly tracked tilt angle (see the op above)."""
         arm = [m for m in ids if m != GRIPPER]
         rows = [{m: float(r[m - 1]) for m in arm} for r in table]
@@ -391,16 +397,42 @@ def main():
         tilt, v, target = 0.0, 0.0, 0.0
         last_seq, last_t = None, time.time()
         ended, t_status = "done", 0.0
+        # Tip hold: the table keeps the COMMANDED tip still, but the arm sags under gravity by a pose-dependent
+        # amount, so the real fingertips wandered ~12 mm (a whole channel) during the tilt (A2b 07:08). Lock the
+        # MEASURED tip (encoders) where it was when the tilt started: every TIP_HOLD_EVERY ticks compare, move the
+        # commanded tip the other way (integral action, time constant TIP_HOLD_TAU_S), and re-solve all six joints
+        # for it at the table's orientation. The result is kept as a joint offset added to the table.
+        import motion as M
+        p_hold = M.fk_mm({m: rel(m) for m in arm})[0]
+        shift = np.zeros(3)                      # mm added to the commanded tip
+        corr = {m: 0.0 for m in arm}             # joint offset (deg) that realises the shift
+        k_tick = 0
+        hold_err = []
 
         def step(goal):
-            nonlocal tilt, v
+            nonlocal tilt, v, shift, corr, k_tick
             i = min(int(tilt / step_deg), n - 1)
             cap = min(max_rate, joint_rate / max(gain[i], 1e-3))   # no joint faster than joint_rate
             want = max(-cap, min(cap, (goal - tilt) / STREAM_TAU_S))
             dv = STREAM_ACC_DEG_S2 * dt
             v += max(-dv, min(dv, want - v))
             tilt = max(0.0, min(n * step_deg, tilt + v * dt))
-            cmd.update(at(tilt))
+            base = at(tilt)
+            k_tick += 1
+            if tip_hold and k_tick % TIP_HOLD_EVERY == 0 and feedback_fresh():
+                err = p_hold - M.fk_mm({m: rel(m) for m in arm})[0]
+                hold_err.append(float(np.linalg.norm(err)))
+                shift = shift + err * (TIP_HOLD_EVERY * dt / TIP_HOLD_TAU_S)
+                n_s = float(np.linalg.norm(shift))
+                if n_s > TIP_HOLD_MAX_MM:
+                    shift = shift * (TIP_HOLD_MAX_MM / n_s)
+                p_b, R_b = M.fk_mm(base)
+                q, pe, ae = M.ik({m: base[m] + corr[m] for m in arm}, p_b + shift, R_b, iters=30)
+                q = dict(q)
+                c_new = {m: q[m] - base[m] for m in arm}
+                if pe <= 1.0 and ae <= 0.5 and max(abs(x) for x in c_new.values()) < TIP_HOLD_MAX_JOINT_DEG:
+                    corr = c_new
+            cmd.update({m: clamp(m, base[m] + corr[m]) for m in arm})
             tick()
 
         while True:
@@ -422,8 +454,11 @@ def main():
                 write_status(busy=True, doing="table_tilt", tilt_deg=round(tilt, 1))
         while tilt > 0.05 or abs(v) > 0.5:      # back to 0 deg, same smoothing
             step(0.0)
-        cmd.update(rows[0])
-        return f"table_tilt ended ({ended}), back upright"
+        if max(abs(corr[m]) for m in arm) < 1.5:
+            cmd.update(rows[0])
+        held = (f", tip held within {max(hold_err):.1f} mm (median {sorted(hold_err)[len(hold_err) // 2]:.1f}), "
+                f"correction {float(np.linalg.norm(shift)):.1f} mm at the end" if hold_err else "")
+        return f"table_tilt ended ({ended}), back upright{held}"
 
     def pose_stream(max_rate, timeout_s):
         """Live control of J1-J6 from POSE_FILE: {"seq": n, "joints": {"1": deg, ...}, "done": bool}, each joint
@@ -606,7 +641,8 @@ def main():
                 elif op == "table_tilt":
                     last["result"] = table_tilt(c["table"], float(c.get("step_deg", 1.0)),
                                                 float(c.get("max_rate_deg_s", 30.0)),
-                                                float(c.get("joint_rate_deg_s", 45.0)), float(c.get("timeout_s", 0.5)))
+                                                float(c.get("joint_rate_deg_s", 45.0)), float(c.get("timeout_s", 0.5)),
+                                                bool(c.get("tip_hold", True)))
                 elif op == "pose_stream":
                     last["result"] = pose_stream(float(c.get("max_rate_deg_s", 60.0)), float(c.get("timeout_s", 0.5)))
                 elif op in ("rest", "stop"):
