@@ -233,7 +233,17 @@ def plan_carry(vial: str, xy) -> tuple[list, dict]:
     return plan_a_to_b(ep), qa
 
 
-def main() -> None:
+def _phase(name: str) -> None:
+    if HOOKS["phase"]:
+        HOOKS["phase"](name)
+
+
+# set by a runner that wraps a job (pour_episode.py): phase(name) is told each step of the pour carry;
+# pour(client, pose, cont) replaces the --tilt sample pour with a real one at the pour pose
+HOOKS = {"phase": None, "pour": None}
+
+
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("job", help="vial 2 container, e.g. A2c; or learn-offsets (tray at its original place)")
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
@@ -242,7 +252,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=T.CAMERA)
     ap.add_argument("--tilt", type=float, default=0.0,
                     help="sample pour at the pour pose: roll the wrist (J6) this many deg, vial top towards the tray")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     learning = a.job == "learn-offsets"
     vial, cont = (None, None) if learning else parse(a.job)
     calib = T.load_calib()
@@ -293,16 +303,23 @@ def main() -> None:
             return
         from episode import reverse_path
         try:
+            _phase("grab")
             grab.play(vial, run=True)
             for mv in moves:
+                _phase(mv.label.split()[0])
                 print("  " + str(client.run(mv).get("result")))
+            _phase("settle")
             # the arm sags by a pose-dependent amount (20 mm down at a stretched pose): put the MEASURED tip on the
             # pour point, then take the nudge back out before reversing the planned moves
             p_pour, _ = M.fk_mm(moves[-1].final_joints)
             err, _ = T.settle_on(client, p_pour)
             print(f"at the pour pose over container {'abcd'[cont - 1]} (tip within {err:.1f} mm): holding 2 s")
             T.time.sleep(2.0)
-            if a.tilt:
+            if HOOKS["pour"]:
+                _phase("pour")
+                HOOKS["pour"](client, pose, cont)
+                _phase("after pour")
+            elif a.tilt:
                 q_hold = client.current_joints()
                 sign = tilt_sign(q_hold, into_tray(pose))
                 q_tilt = {**q_hold, 6: q_hold[6] + sign * abs(a.tilt)}
@@ -317,11 +334,14 @@ def main() -> None:
                 client._send({"op": "move", "joints": {str(j): v for j, v in q_hold.items()},
                               "speed": TILT_SPEED_DEG_S})
                 print("  wrist back upright")
+            _phase("return")
             back = M.plan_line(client.current_joints(), p_pour, None, speed_mm_s=10.0, label="undo the sag nudge")
             print("  " + str(client.run(back).get("result")))
             for mv in reversed(moves):
                 print("  " + str(client.run(reverse_path(mv)).get("result")))
+            _phase("release")
             grab.play(vial, run=True, reverse=True)
+            _phase("done")
         except (RuntimeError, TimeoutError, M.PlanError) as e:
             sys.exit(f"STOPPED (arm_server holds the arm where it is): {e}")
         print(f"{a.job} done: vial back in its slot, arm at rest")
