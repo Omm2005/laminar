@@ -22,6 +22,9 @@ a = ap.parse_args()
 
 def open_cam():
     c = cv2.VideoCapture(a.camera, cv2.CAP_DSHOW)
+    # MJPG: a fraction of the USB bandwidth of raw frames. Raw, it delivered black frames once the side camera
+    # started streaming on the same hub (B2b 07:50: no markers seen, then no frame)
+    c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     c.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     c.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     # 10 fps, not 30: a third of the USB traffic. The camera shares a USB hub with the arm's CAN adapter, and the CAN
@@ -35,6 +38,8 @@ t_save = 0.0
 misses = 0
 while True:
     ok, frame = cap.read()
+    if ok and float(frame.mean()) < 3.0:   # an all-black frame is a starved camera, not a picture
+        ok = False
     if not ok:
         # a missed frame used to end the stream, and a pour episode then stopped at "camera would not open"
         # (07:40, when the side camera started streaming on the same hub). Wait it out, reopen after a few.

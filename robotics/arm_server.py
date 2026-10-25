@@ -79,6 +79,11 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
+# A USB stall on the shared hub silences EVERY motor at once for 0.1-0.4 s (B2b 07:52: all replies 0.31 s old, the
+# wrist camera dropping frames at the same moment). The motors keep holding their last command meanwhile, so a short
+# gap is a pause, not a fault: motion freezes (op_time stops) until replies come back, and only a gap longer than
+# FEEDBACK_ABORT_S stops the server.
+FEEDBACK_ABORT_S = 1.0
 # Sag hold (every op): a loaded joint sits a nearly constant amount short of its command (gravity against finite
 # stiffness), and that amount changes with the pose: the tip ended 20-40 mm off planned poses and wandered ~12 mm
 # during the pour tilt. Each arm joint is commanded ahead by its own measured tracking error (encoders, low-passed),
@@ -219,7 +224,7 @@ def main():
             print(f"control loop paused {gap:.2f} s: waiting for fresh motor replies", flush=True)
         for mid in ids:
             st = bus.state.get(mid)
-            if (st is None or now - st["t"] > FEEDBACK_TIMEOUT) and now > startup["until"]:
+            if (st is None or now - st["t"] > FEEDBACK_ABORT_S) and now > startup["until"]:
                 ages = " ".join(f"J{m}={now - bus.state[m]['t']:.2f}s" if m in bus.state else f"J{m}=never"
                                 for m in ids)
                 raise RuntimeError(f"lost feedback from J{mid} (reply ages {ages}; usb read errors {bus.rx_errors}"
@@ -267,6 +272,23 @@ def main():
             except PermissionError:
                 time.sleep(0.002)
 
+    stall = {"total": 0.0, "since": None, "t": time.time()}
+
+    def op_time():
+        """time.time() minus every USB stall so far: motion timed by it freezes while the motors aren't answering."""
+        return time.time() - stall["total"]
+
+    def stall_update():
+        now = time.time()
+        if enabled and not feedback_fresh():
+            stall["total"] += now - stall["t"]
+            if stall["since"] is None:
+                stall["since"] = now
+        elif stall["since"] is not None:
+            print(f"motor replies paused {now - stall['since']:.2f} s (USB stall): motion held, resuming", flush=True)
+            stall["since"] = None
+        stall["t"] = now
+
     def tick():
         """One control step at a steady HZ: feedforward from how the command moved, send, check, then sleep
         until the next deadline (not a flat dt, which drifts and jitters with the time spent sending)."""
@@ -278,6 +300,7 @@ def main():
                 v = max(-VEL_FF_MAX, min(VEL_FF_MAX, v))
                 vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
         clock["prev"], clock["t"] = dict(cmd), now
+        stall_update()
         sag_update()
         send_all()
         check()
@@ -305,10 +328,10 @@ def main():
         goal = {m: clamp(m, goal.get(m, frm[m])) for m in frm}
         dist = max(abs(goal[m] - frm[m]) for m in frm)
         duration = max(0.5, 1.5 * dist / speed)
-        t0 = time.time()
+        t0 = op_time()
         t_status = 0.0
         while True:
-            s = min(1.0, (time.time() - t0) / duration)
+            s = min(1.0, (op_time() - t0) / duration)
             for m in frm:
                 cmd[m] = frm[m] + (goal[m] - frm[m]) * smoothstep(s)
             tick()
@@ -346,10 +369,10 @@ def main():
         if grips:
             grip["limit"], grip["teleop_hold"] = GRIP_MOVE_TORQUE, True
         duration = (len(pts) - 1) / hz
-        t0 = time.time()
+        t0 = op_time()
         t_status = 0.0
         while True:
-            x = min(len(pts) - 1.0, (time.time() - t0) * hz)
+            x = min(len(pts) - 1.0, (op_time() - t0) * hz)
             i = min(int(x), len(pts) - 2) if len(pts) > 1 else 0
             f = x - i
             for m in arm_ids:
@@ -441,7 +464,8 @@ def main():
             want = max(-cap, min(cap, (goal - tilt) / STREAM_TAU_S))
             dv = STREAM_ACC_DEG_S2 * dt
             v += max(-dv, min(dv, want - v))
-            tilt = max(0.0, min(n * step_deg, tilt + v * dt))
+            if feedback_fresh():          # a USB stall freezes the tilt where it is
+                tilt = max(0.0, min(n * step_deg, tilt + v * dt))
             cmd.update(at(tilt))
             k_tick += 1
             if k_tick % 5 == 0 and feedback_fresh():
