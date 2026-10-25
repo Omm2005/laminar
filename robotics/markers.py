@@ -658,6 +658,40 @@ def run_container(client, n: int, plan: list, workspace, learned, confirm=input,
     return learned
 
 
+def locate_tray(client, calib: dict, camera: int, confirm=input) -> tuple[dict, dict]:
+    """arm_server.py running: go to the scan pose, turn the base until the tray is seen, lock in there (LOCK_PHOTOS
+    photos averaged). Returns (tray pose, the scan joints it was seen from)."""
+    client.current_joints()  # refuses now if arm_server.py isn't running
+    q_scan = calib["scan_pose"]
+    pose = None
+    for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view, then lock in at that angle
+        q_look = {**q_scan, 1: q_scan[1] + dj1}
+        confirm(f"Enter: joint move to the scan pose{f' with the base turned {dj1:+g} deg' if dj1 else ''} "
+              f"at {MOVE_SPEED:g} deg/s (Ctrl+C stops) ")
+        client._send({"op": "move", "joints": {str(j): v for j, v in q_look.items()}, "speed": MOVE_SPEED})
+        looks = []
+        cap = open_camera(camera)
+        try:
+            for n in range(LOCK_PHOTOS):  # first detection, then a second photo to confirm it
+                time.sleep(0.5 if n else 0.0)
+                try:
+                    looks.append(find_tray(grab(cap, settle=10), calib, dj1))
+                except ValueError as e:
+                    print(f"  base {dj1:+g} deg, photo {n + 1}: {e}")
+        finally:
+            cap.release()
+        if looks:
+            pose = lock_in(looks)
+            q_scan = q_look
+            print(f"  base {dj1:+g} deg: locked in on the tray from {len(looks)} detection(s), "
+                  f"markers {pose['seen']}" + (f", photos agree within {pose['spread_mm']:.1f} mm"
+                                               if len(looks) > 1 else ""))
+            break
+    if pose is None:
+        raise SystemExit("tray not found at any base angle")
+    return pose, q_scan
+
+
 def cmd_visit(a) -> None:
     calib = load_calib()
     bench = yaml.safe_load(BENCH_FILE.read_text()) if BENCH_FILE.exists() else {}
@@ -669,33 +703,7 @@ def cmd_visit(a) -> None:
     if a.run:
         from arm_client import ArmClient
         client = ArmClient()
-        client.current_joints()  # refuses now if arm_server.py isn't running
-        pose = None
-        for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view, then lock in at that angle
-            q_look = {**q_scan, 1: q_scan[1] + dj1}
-            input(f"Enter: joint move to the scan pose{f' with the base turned {dj1:+g} deg' if dj1 else ''} "
-                  f"at {MOVE_SPEED:g} deg/s (Ctrl+C stops) ")
-            client._send({"op": "move", "joints": {str(j): v for j, v in q_look.items()}, "speed": MOVE_SPEED})
-            looks = []
-            cap = open_camera(a.camera)
-            try:
-                for n in range(LOCK_PHOTOS):  # first detection, then a second photo to confirm it
-                    time.sleep(0.5 if n else 0.0)
-                    try:
-                        looks.append(find_tray(grab(cap, settle=10), calib, dj1))
-                    except ValueError as e:
-                        print(f"  base {dj1:+g} deg, photo {n + 1}: {e}")
-            finally:
-                cap.release()
-            if looks:
-                pose = lock_in(looks)
-                q_scan = q_look
-                print(f"  base {dj1:+g} deg: locked in on the tray from {len(looks)} detection(s), "
-                      f"markers {pose['seen']}" + (f", photos agree within {pose['spread_mm']:.1f} mm"
-                                                   if len(looks) > 1 else ""))
-                break
-        if pose is None:
-            raise SystemExit("tray not found at any base angle")
+        pose, q_scan = locate_tray(client, calib, a.camera)
     else:
         if not a.image:
             raise SystemExit("without --run, give a scan-pose photo: --image tray_scan_1.jpg [--dj1 deg]")
