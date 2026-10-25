@@ -99,7 +99,7 @@ class Watch:
 
     def _side_view(self) -> None:
         """Live window of the side camera (this process owns it): each box with its mL, the phase; a frame kept
-        twice a second in side/, cut off above the tray (the levels still come from the full frame). All drawing
+        twice a second in side/, cut down to the tray (the levels still come from the full frame). All drawing
         happens in this one thread (OpenCV windows want that)."""
         import cv2
         import live_view
@@ -119,8 +119,9 @@ class Watch:
                 if target:
                     cv2.putText(img, f"{name} {r.ml:.2f} mL", (x, max(15, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                                 col, 2)
-            img = img[live_view.tray_top([c.roi for c in self.tracker.columns.values()], 30):]   # only the tray
-            cv2.putText(img, f"phase: {self.phase}", (10, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+            img = live_view.tray_view(img, [c.roi for c in self.tracker.columns.values()], 30, bottom=8)  # the tray
+            img = cv2.copyMakeBorder(img, 0, 34, 0, 0, cv2.BORDER_CONSTANT, value=(30, 30, 30))  # strip for the phase
+            cv2.putText(img, f"phase: {self.phase}", (10, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (0, 0, 255), 2)
             if time.time() - t_save > 1.0 / WRIST_HZ:
                 t_save = time.time()

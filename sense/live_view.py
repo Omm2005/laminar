@@ -62,12 +62,19 @@ class ReplayCam:
 
 BOXES_FILE = HERE / "live_boxes.json"
 VIEW_MARGIN_PX = 60          # shown above the highest box: room for the labels and the banner
+VIEW_SIDE_PX, VIEW_BOTTOM_PX = 40, 22   # beside the outer boxes, below the lowest one (the rate label)
 
 
-def tray_top(boxes, margin: int = VIEW_MARGIN_PX) -> int:
-    """First image row worth showing: the views are cut off above the tray (the room behind it is just noise).
+def tray_view(img: np.ndarray, boxes, top: int = VIEW_MARGIN_PX, side: int = VIEW_SIDE_PX,
+              bottom: int = VIEW_BOTTOM_PX) -> np.ndarray:
+    """The picture cut down to the tray: the room above, the table below and whatever is beside it are noise.
     Only the picture is cut: the model reads the box crops of the full frame, so nothing it sees changes."""
-    return max(0, min(int(b[1]) for b in boxes) - margin)
+    H, W = img.shape[:2]
+    y0 = max(0, min(int(b[1]) for b in boxes) - top)
+    y1 = min(H, max(int(b[1] + b[3]) for b in boxes) + bottom)
+    x0 = max(0, min(int(b[0]) for b in boxes) - side)
+    x1 = min(W, max(int(b[0] + b[2]) for b in boxes) + side)
+    return img[y0:y1, x0:x1]
 
 
 class VideoCam:
@@ -326,7 +333,7 @@ def draw(frame: np.ndarray, tracker, names: list[str], start_ml: dict, capacity_
         flow = shown_rate(state, n + "/s", flow)
         if sure and flow > 0:
             cv2.putText(img, f"+{flow:.2f}/s", (x, y + h + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.35, ORANGE, 1, cv2.LINE_AA)
-    img = img[tray_top([c.roi for c in tracker.columns.values()]):]     # only the tray, not the room above it
+    img = tray_view(img, [c.roi for c in tracker.columns.values()])      # only the tray
     # banner
     cv2.rectangle(img, (0, 0), (img.shape[1], 26), (30, 30, 30), -1)
     parts = []
