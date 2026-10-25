@@ -63,8 +63,8 @@ ARGS = SimpleNamespace(ask=False, side_cam=2, wrist_cam=1, episode_args=[])
 
 def test_a_good_run_reports_running_steps_pours_and_done(tmp_path, monkeypatch):
     fake_episode(tmp_path, monkeypatch, {"jobs": [
-        {"start": {"B": {"ml": 0.2}}, "end": {"B": {"ml": 1.18}}},
-        {"start": {"C": {"ml": 0.0}}, "end": {"C": {"ml": 0.52}}}], "error": None})
+        {"start": {"B": {"ml": 0.2}}, "target": 0.4, "end": {"B": {"ml": 1.18}}},
+        {"start": {"C": {"ml": 0.0}}, "target": 0.2, "end": {"C": {"ml": 0.52}}}], "error": None})
     site = FakeSite()
     B.run_one(site, RUN, ARGS)
     assert site.updates[0] == {"status": "running", "step": 0}
@@ -73,6 +73,16 @@ def test_a_good_run_reports_running_steps_pours_and_done(tmp_path, monkeypatch):
     assert pours == [{"tube": "B", "well": 2, "targetMl": 1.0, "pouredMl": 0.98},
                      {"tube": "B", "well": 3, "targetMl": 0.5, "pouredMl": 0.52}]
     assert site.updates[-1] == {"status": "done"}
+
+
+def test_a_job_stopped_before_its_pour_reports_no_measurement(tmp_path, monkeypatch):
+    """arm_server down: the job ends before the pour (no "target"), but pour_episode still logs start and end."""
+    fake_episode(tmp_path, monkeypatch, {"jobs": [{"start": {"B": {"ml": 0.2}}, "end": {"B": {"ml": 0.2}}}],
+                                         "error": "B2b: arm_server.py is not running"})
+    site = FakeSite()
+    B.run_one(site, RUN, ARGS)
+    assert not [u for u in site.updates if "pour" in u]
+    assert site.updates[-1]["status"] == "aborted"
 
 
 def test_a_stopped_episode_reports_aborted_with_the_reason(tmp_path, monkeypatch):

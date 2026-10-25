@@ -82,6 +82,17 @@ def pour_steps(moves: list[str]) -> list[int]:
     return [i for i, m in enumerate(moves or []) if m.startswith("pour(")]
 
 
+def arm_problem() -> str | None:
+    """Why the arm can't take a run now (arm_server.py not running / stopped on a fault), or None. Same check as the
+    pours themselves (arm_client: arm_status.json is rewritten every 0.5 s while the server is up)."""
+    try:
+        from arm_client import ArmClient
+        ArmClient().current_joints()
+        return None
+    except Exception as e:  # noqa: BLE001 - any reason the arm isn't usable
+        return str(e)
+
+
 def run_one(site: Site, run: dict, a) -> None:
     rid = run["id"]
     try:
@@ -128,6 +139,8 @@ def run_one(site: Site, run: dict, a) -> None:
     if out_dir and (out_dir / "summary.json").exists():
         summary = json.loads((out_dir / "summary.json").read_text())
     for rec, job in zip(summary.get("jobs") or [], jobs):
+        if "target" not in rec:                              # stopped before the pour began: nothing was poured
+            continue
         try:
             poured = rec["end"][job["column"]]["ml"] - rec["start"][job["column"]]["ml"]
         except (KeyError, TypeError):
@@ -164,7 +177,7 @@ def main() -> int:
         return 1
     site = Site(a.site, token)
     print(f"bench runner: waiting for approved runs from {a.site} (Ctrl+C stops)")
-    down = False
+    down, waiting = False, None
     while True:
         try:
             run = site.next()
@@ -179,6 +192,14 @@ def main() -> int:
                 print(f"website unreachable ({e}); retrying")
             down, run = True, None
         if run:
+            problem = arm_problem()
+            if problem:                                      # leave the run approved; take it once the arm is up
+                if waiting != run["id"]:
+                    print(f"approved run {run['id'][-6:]} is waiting: {problem}")
+                    waiting = run["id"]
+                time.sleep(a.poll)
+                continue
+            waiting = None
             try:
                 run_one(site, run, a)
             except KeyboardInterrupt:
