@@ -54,6 +54,12 @@ WATCH_IDLE_S = 30 * 60          # keep relaying a requester's updates this long 
 APPROVE = re.compile(r"^\s*(approve|approved|yes|yes,? run it|run it|go ahead|confirm)\b", re.I)
 CANCEL = re.compile(r"^\s*(cancel|reject|stop the plan|don'?t run it)\b", re.I)
 STATUS = re.compile(r"^\s*(status|progress|results?|how did it go|is it done)\b", re.I)
+# ASI:One's assistant answers every message it gets ("Understood, noted..."): those get no reply, or the two
+# would talk forever. And at most MAX_REPLIES replies per BURST_S to one sender.
+ACK = re.compile(r"^\W*(ok(ay)?|understood|noted|got it|thanks?|thank you|great|perfect|cool|no worries|all clear|"
+                 r"sounds good|will do|logged|closing|standing by|consider it|acknowledged|appreciated|no problem)\b", re.I)
+MAX_REPLIES, BURST_S = 4, 120
+REPLY_WAIT_S = 60               # wait this long for the assistant's answer before replying to a person
 
 seed = env("BENCH_AGENT_SEED")
 if not seed:
@@ -172,6 +178,31 @@ async def render(sender: str, rows: list[dict]) -> tuple[str, list[dict]]:
     return "\n\n".join(parts), events
 
 
+async def answer(sender: str, since_ms: float) -> str:
+    """The assistant's answer to a message sent at since_ms (its reply and the plan card that follows it)."""
+    end, got, changed = time.time() + REPLY_WAIT_S, [], time.time()
+    while time.time() < end:
+        rows = [r for r in await call("query", "remote:replies", {"sender": sender, "since": since_ms})
+                if r.get("tool") in (None, "", "plan")]
+        if len(rows) != len(got):
+            got, changed = rows, time.time()
+        elif got and time.time() - changed > 2.0:                    # the plan card comes just after the reply
+            break
+        await asyncio.sleep(0.7)
+    if not got:
+        return "The bench's assistant is taking longer than usual: ask \"status\" in a minute."
+    return (await render(sender, got))[0]
+
+
+def _pushed(r: dict, label: str) -> bool:
+    """For a person (ASI:One): which bench messages are worth an unprompted message: the result of a run, and the
+    technician's decision (their own approve / cancel was already answered)."""
+    if r.get("tool") == "run_summary":
+        return True
+    by = str((r.get("args") or {}).get("by", ""))
+    return r.get("tool") == "approval" and not (by.startswith(label) or by == "requester")
+
+
 @agent.on_interval(period=1.5)
 async def relay(ctx: Context):
     """Send each watched requester what the bench said since last time (replies, plan, approval, results)."""
@@ -180,6 +211,22 @@ async def relay(ctx: Context):
     for sender in ctx.storage.get("watch") or []:
         st = _state(ctx, sender)
         try:
+            if not st.get("machine"):                               # a person (ASI:One): one reply per message
+                st.setdefault("push_since", int(now * 1000))
+                rows = await call("query", "remote:replies", {"sender": sender, "since": st["push_since"]})
+                if rows:
+                    st["push_since"] = rows[-1]["at"]
+                    push = [r for r in rows if _pushed(r, st.get("label", ""))]
+                    if push:
+                        await ctx.send(sender, _msg((await render(sender, push))[0], end=True))
+                    st["active"] = now
+                runs = await call("query", "remote:runs", {"sender": sender, "limit": 3})
+                if any(r["status"] in OPEN for r in runs):
+                    st["active"] = now
+                _save(ctx, sender, st)
+                if now - st.get("active", now) < WATCH_IDLE_S:
+                    keep.append(sender)
+                continue
             rows = await call("query", "remote:replies", {"sender": sender, "since": st.get("since", 0)})
             if rows:
                 text, events = await render(sender, rows)
@@ -225,6 +272,7 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
     st.setdefault("label", "ASI:One user")
     st.setdefault("via", "asi-one")
     st.setdefault("since", int(time.time() * 1000) - 1000)
+    st.setdefault("push_since", int(time.time() * 1000))
     st["active"] = time.time()
     _save(ctx, sender, st)
     if not text:
@@ -232,18 +280,37 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
             ctx.logger.info(f"session started by {sender[:16]}")
         return
     ctx.logger.info(f"{st['label']} ({sender[:16]}): {text[:120]}")
+    person = not st.get("machine")
+    if person:
+        recent = [t for t in st.get("replies", []) if time.time() - t < BURST_S]
+        if ACK.match(text) and len(text) < 300:
+            return                                                   # "Understood, noted": nothing to answer
+        if len(recent) >= MAX_REPLIES:
+            ctx.logger.warning(f"{sender[:16]}: {MAX_REPLIES} replies in {BURST_S} s, not answering (chat loop?)")
+            return
+        st["replies"] = recent + [time.time()]
+        _save(ctx, sender, st)
+
+    async def reply(t: str):
+        await ctx.send(sender, _msg(t, end=person))
+
     try:
         if APPROVE.match(text) and (plan := await _open_plan(sender)):
             await call("mutation", "remote:approve", {"sender": sender, "jobId": plan["plan_id"]})
-            return                                                   # the approval message comes through relay()
+            if person:
+                await reply(f"Approved. The simulated robot is running plan {_short(plan['plan_id'])} now: I'll send the "
+                            "measured volumes when it finishes (about a minute), or ask \"status\".")
+            return                                                   # agents: the approval comes through relay()
         if CANCEL.match(text) and (plan := await _open_plan(sender)):
             await call("mutation", "remote:cancel", {"sender": sender, "jobId": plan["plan_id"]})
+            if person:
+                await reply(f"Cancelled plan {_short(plan['plan_id'])}. Nothing moved.")
             return
         if STATUS.match(text) and len(text) < 40:
             runs = await call("query", "remote:runs", {"sender": sender, "limit": 3})
             if not runs:
-                await ctx.send(sender, _msg("You have no runs on this bench yet. Ask for a pour, e.g. "
-                                            "\"pour 1 mL of the blue dye into container 2\"."))
+                await reply("You have no runs on this bench yet. Ask for a pour, e.g. "
+                            "\"pour 1 mL of the blue dye into container 2\".")
             else:
                 lines = []
                 for r in runs:
@@ -251,14 +318,16 @@ async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
                                  + (f", approved by {r['approved_by']}" if r.get("approved_by") else "")
                                  + (f". {r['fail_reason']}" if r.get("fail_reason") else ""))
                     lines += _results_lines(r)
-                await ctx.send(sender, _msg("\n".join(lines)))
+                await reply("\n".join(lines))
             return
-        await call("mutation", "remote:ask", {"sender": sender, "text": text, "label": st["label"], "via": st["via"]})
-        # the assistant's reply arrives in the thread; relay() sends it on
+        asked = await call("mutation", "remote:ask", {"sender": sender, "text": text, "label": st["label"], "via": st["via"]})
+        if person:
+            await reply(await answer(sender, asked["at"]))         # one reply per message, like ASI:One expects
+        # agents: the assistant's reply arrives in the thread and relay() sends it on, with machine-readable events
     except ConvexError as e:
-        await ctx.send(sender, _msg(str(e)[:1].upper() + str(e)[1:]))
+        await reply(str(e)[:1].upper() + str(e)[1:])
     except OSError:
-        await ctx.send(sender, _msg("The bench is offline right now (its dashboard isn't reachable). Try again later."))
+        await reply("The bench is offline right now (its dashboard isn't reachable). Try again later.")
 
 
 @chat.on_message(ChatAcknowledgement)

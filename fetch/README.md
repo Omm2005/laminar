@@ -71,6 +71,11 @@ Agentverse and click *Chat with Agent*. Then try:
    tolerance or not.
 4. `status` lists your runs and results. `cancel` withdraws a waiting plan.
 
+How it talks to ASI:One: one reply per message, ending the turn (as ASI:One expects). The only unprompted message
+is the run's result. It doesn't answer pure acknowledgements ("Understood", "Noted"), and it answers at most 4
+messages per 2 minutes to one sender, so it can't get into a back-and-forth with ASI:One's own assistant. Short plan
+ids from the chat ("plan 8gyfhw") work everywhere.
+
 Things it should refuse, with the reason: more than is left in the vial, a pour that would overflow a container, a
 liquid that isn't loaded.
 

@@ -3,7 +3,6 @@
 import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal, api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 
 /** Lab chat agent. Claude reads the request and may call three tools:
@@ -292,10 +291,18 @@ export const chat = internalAction({
                robot_ready: st.robot === null, robot_not_ready_because: st.robot };
     };
 
+    /** A plan by its id, or by the short id shown in chats (its last characters, e.g. "8gyfhw"). */
+    const findPlan = async (planId: string) => {
+      const id = planId.trim();
+      if (!id) return null;
+      const recent = await ctx.runQuery(api.jobs.list, { limit: 100 });
+      return recent.find((j) => j._id === id) ?? recent.find((j) => j.threadId === args.threadId && j._id.endsWith(id)) ?? null;
+    };
+
     /** request_approval: put the plan in front of a person. */
     const requestApproval = async (planId: string) => {
       const { vials, channels } = await load();
-      const job = await ctx.runQuery(api.jobs.get, { jobId: planId as Id<"jobs"> }).catch(() => null);
+      const job = await findPlan(planId);
       if (!job || job.status !== "queued") return { ok: false as const, problems: ["no submitted plan with that id"] };
       await ctx.runMutation(internal.jobs.requestApprovalInternal, { jobId: job._id });
       cards.push({
@@ -309,7 +316,7 @@ export const chat = internalAction({
 
     const report = async (planId?: string) => {
       const job = planId
-        ? await ctx.runQuery(api.jobs.get, { jobId: planId as Id<"jobs"> })
+        ? await findPlan(planId)
         : (await ctx.runQuery(api.jobs.list, { limit: 10 })).find((j) =>
             !["awaiting_approval", "rejected", "planning", "queued"].includes(j.status));
       if (!job) return { found: false as const };
