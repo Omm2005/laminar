@@ -735,8 +735,15 @@ def run_container(client, n: int, plan: list, workspace, learned, confirm=input,
 
 def locate_tray(client, calib: dict, camera: int, confirm=input) -> tuple[dict, dict]:
     """arm_server.py running: go to the scan pose, turn the base until the tray is seen, lock in there (LOCK_PHOTOS
-    photos averaged). Returns (tray pose, the scan joints it was seen from)."""
+    photos averaged). Returns (tray pose, the scan joints it was seen from).
+    With the wrist camera calibrated (handeye.yaml, from `handeye.py orbit`) and tray_look.yaml, the tray is
+    found from there with that calibration instead: it works from any arm pose, so it does not need the markers
+    where the scan-pose homography was taught (they moved onto the container tops, 2026-10-25)."""
     client.current_joints()  # refuses now if arm_server.py isn't running
+    look_file = HERE / "tray_look.yaml"
+    look = yaml.safe_load(look_file.read_text())["joints"] if look_file.exists() else None
+    if look and (HERE / "handeye.yaml").exists():
+        return locate_tray_handeye(client, look, camera, confirm)
     q_scan = calib["scan_pose"]
     pose = None
     for dj1 in SWEEP_DEG:     # turn only the base until the tray is in view, then lock in at that angle
@@ -765,6 +772,40 @@ def locate_tray(client, calib: dict, camera: int, confirm=input) -> tuple[dict, 
     if pose is None:
         raise SystemExit("tray not found at any base angle")
     return pose, q_scan
+
+
+def locate_tray_handeye(client, q_look: dict, camera: int, confirm=input) -> tuple[dict, dict]:
+    """locate_tray with the calibrated wrist camera: from the tray_look.yaml pose (base turned if needed), each photo
+    locates every marker in 3-D from the measured joints, a rigid fit of the marker layout gives the tray pose."""
+    import handeye as H
+    he = H.load()
+    q_look = {int(j): float(v) for j, v in q_look.items()}
+    for dj1 in SWEEP_DEG:
+        q = {**q_look, 1: q_look[1] + dj1}
+        confirm(f"Enter: joint move to the tray look pose{f' with the base turned {dj1:+g} deg' if dj1 else ''} ")
+        client._send({"op": "move", "joints": {str(j): v for j, v in q.items()}, "speed": MOVE_SPEED})
+        looks = []
+        cap = open_camera(camera)
+        try:
+            for n in range(LOCK_PHOTOS + 1):
+                time.sleep(0.5)
+                frame = grab(cap, settle=10)
+                st = client.status() or {}
+                q_meas = {j: float(st["state"][f"J{j}"]) for j in range(1, 7)}
+                try:
+                    looks.append(H.tray_from(he, H.locate(he, q_meas, frame)))
+                except ValueError as e:
+                    print(f"  base {dj1:+g} deg, photo {n + 1}: {e}")
+        finally:
+            cap.release()
+        if looks:
+            pose = lock_in(looks)
+            pose["rms_mm"] = float(np.mean([lk["rms_mm"] for lk in looks]))
+            print(f"  base {dj1:+g} deg: tray at ({pose['xy'][0]:.1f}, {pose['xy'][1]:.1f}) mm, heading "
+                  f"{pose['heading_deg']:.1f} deg, markers {pose['seen']}, fit {pose['rms_mm']:.1f} mm, photos agree "
+                  f"within {pose['spread_mm']:.1f} mm (wrist camera calibration)")
+            return pose, q
+    raise SystemExit("tray not found at any base angle from the tray look pose")
 
 
 def cmd_visit(a) -> None:

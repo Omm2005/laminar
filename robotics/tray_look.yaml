@@ -1,0 +1,3 @@
+# Joint pose the wrist camera finds the tray from (markers.locate_tray_handeye): orbit view 9 of
+# logs/handeye_orbit_20261025_055811 (yaw 0, tilt -8), all four markers in view, tray fit 1.4 mm.
+joints: {1: -36.5, 2: 82.1, 3: 75.3, 4: -25.6, 5: 21.4, 6: 61.2}
