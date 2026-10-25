@@ -226,6 +226,17 @@ You never start the robot yourself and you never say a plan is approved or runni
 - If the robot is not ready, say why plainly; you may still prepare a plan for review.
 - Replies are read aloud: one to three short sentences, no markdown.`;
 
+/** Added for a request from another lab's agent (remote.ts: Fetch.ai uAgents, ASI:One). */
+function remoteNote(label: string) {
+  return `
+
+This conversation is NOT with the technician: it is with ${label}, another lab, writing through its agent (Fetch.ai
+ASI:One). They can't see this bench. Same loop: plan, check, request_approval. After request_approval tell them the plan
+is waiting for the technician at this bench (on a simulated bench they may reply "approve" themselves), and that you will
+message them when it runs and with the measured volumes. Give container numbers and vial letters with names. Your reply
+is shown as chat text: two to four short sentences, plain text.`;
+}
+
 /* ------------------------------------------------------------------ chat */
 
 type RawPour = { vial: string | number; container: number; ml: number };
@@ -310,6 +321,9 @@ export const chat = internalAction({
                results: job.report?.results ?? null, abort: job.report?.abort ?? null };
     };
 
+    const remote = args.threadId.startsWith("remote:")
+      ? await ctx.runQuery(internal.remote.getInternal, { threadId: args.threadId }) : null;
+    const system = remote ? SYSTEM + remoteNote(remote.label) : SYSTEM;
     const key = process.env.ANTHROPIC_API_KEY;
     try {
       if (!key) {
@@ -320,7 +334,9 @@ export const chat = internalAction({
           if (!res.ok) await say("I can't plan that: " + res.problems.join("; ") + ".");
           else {
             await requestApproval(res.plan_id);
-            await say(st.robot ? `Here's the plan to review. It can't run yet: ${st.robot}.` : "Here's the plan. Approve or reject it.");
+            await say(st.robot ? `Here's the plan to review. It can't run yet: ${st.robot}.`
+              : remote ? "The plan is checked and waiting for the technician at the bench to approve. I'll message you when it runs."
+              : "Here's the plan. Approve or reject it.");
           }
         } else if (r.kind === "report") {
           const rep = await report();
@@ -338,7 +354,7 @@ export const chat = internalAction({
         let final = "";
         for (let turn = 0; turn < 8; turn++) {
           const resp = await client.beta.messages.create({
-            model: MODEL, max_tokens: 4096, system: SYSTEM, tools: TOOLS, messages,
+            model: MODEL, max_tokens: 4096, system, tools: TOOLS, messages,
             output_config: { effort: "low" },
             betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
           });

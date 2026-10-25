@@ -197,6 +197,7 @@ a { color: inherit; }
 @keyframes x-rise { from { transform: translateY(8px); opacity: 0; } }
 
 /* permission card */
+.remote-inbox { display: flex; flex-direction: column; gap: 10px; align-self: stretch; padding-bottom: 14px; border-bottom: 1px dashed var(--hair); margin-bottom: 6px; }
 .perm { align-self: stretch; border: 1px solid var(--hair); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow);
   overflow: hidden; animation: x-rise .25s ease; }
 .perm.waiting { border-color: color-mix(in srgb, var(--ink) 35%, var(--hair)); }
@@ -261,9 +262,10 @@ a { color: inherit; }
 .audit-row.on { background: var(--panel-2); }
 .audit-row .r1 { display: flex; gap: 8px; align-items: flex-start; }
 .audit-row .r1 .req { flex: 1; font-size: 13.5px; line-height: 1.35; }
-.audit-row .r2 { display: flex; gap: 10px; font: 500 11px var(--mono); color: var(--muted); }
+.audit-row .r2 { display: flex; gap: 10px; font: 500 11px var(--mono); color: var(--muted); flex-wrap: wrap; }
 .audit-detail { padding: 18px 20px; overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 16px; }
-.kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; }
+.audit-detail > * { flex-shrink: 0; }
+.kv { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; }
 .kv > div { padding: 10px 12px; border-right: 1px solid var(--hair); }
 .kv > div:last-child { border-right: 0; }
 .kv .k { font: 500 10.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }

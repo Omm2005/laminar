@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Start the whole Laminar dashboard on this Mac with one command:
 #
-#     ~/laminar-console/console/start.sh            # side camera 0
-#     ~/laminar-console/console/start.sh 1          # another side camera
+#     console/start.sh            # side camera 0, the real arm
+#     console/start.sh 1          # another side camera
+#     console/start.sh sim        # simulated arm + camera (no hardware: try it anywhere)
 #
 # 1. the dashboard's data store (Convex, running locally on this Mac: no account, nothing to set up)
-# 2. your Claude key from ~/laminar/.env, handed to it (the key is never printed)
+# 2. your Claude key from the repo .env (or ~/laminar/.env), handed to it (the key is never printed)
 # 3. the dashboard website              -> http://localhost:5173
 # 4. the bench link: arm (arm_server.py), side camera, level model, approved plans
 # Ctrl+C stops everything. Logs: ~/laminar/logs/dashboard/*.log
@@ -15,9 +16,12 @@
 set -u
 CAM="${1:-0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="${LAMINAR_REPO:-$HOME/laminar}"
+REPO="${LAMINAR_REPO:-$(cd "$HERE/.." && pwd)}"
 LOGS="$REPO/logs/dashboard"
-PY="$REPO/.venv/bin/python"
+PY="${LAMINAR_PYTHON:-$REPO/.venv/bin/python}"
+[ -x "$PY" ] || PY="$HOME/laminar/.venv/bin/python"
+[ -x "$PY" ] || { echo "no Python venv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r sense/requirements.txt"; exit 1; }
+ENV_FILE="$REPO/.env"; [ -f "$ENV_FILE" ] || ENV_FILE="$HOME/laminar/.env"
 mkdir -p "$LOGS"
 cd "$HERE" || exit 1
 
@@ -51,13 +55,13 @@ for _ in $(seq 1 90); do grep -q "Convex functions ready" "$LOGS/convex.log" 2>/
 grep -q "Convex functions ready" "$LOGS/convex.log" || { echo "data store did not start: see $LOGS/convex.log"; exit 1; }
 
 echo "2/4 Claude key..."
-KEY="$(grep -E '^ANTHROPIC_API_KEY=' "$REPO/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]"'"'")"
+KEY="$(grep -E '^ANTHROPIC_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]"'"'")"
 if [ -n "$KEY" ]; then
-  bunx convex env set ANTHROPIC_API_KEY "$KEY" >/dev/null 2>&1 && echo "    key loaded from ~/laminar/.env" \
+  bunx convex env set ANTHROPIC_API_KEY "$KEY" >/dev/null 2>&1 && echo "    key loaded from $ENV_FILE" \
     || echo "    could not load the key (see $LOGS/convex.log); the chat will use its simple fallback"
 else
   bunx convex env remove ANTHROPIC_API_KEY >/dev/null 2>&1
-  echo "    no key in ~/laminar/.env: the chat uses its simple fallback, not Claude"
+  echo "    no ANTHROPIC_API_KEY in $ENV_FILE: the chat uses its simple fallback, not Claude"
 fi
 unset KEY
 
@@ -66,7 +70,8 @@ bun run dev --port 5173 >"$LOGS/web.log" 2>&1 &
 pids+=($!)
 
 echo "4/4 bench link (camera $CAM)..."
-LAMINAR_REPO="$REPO" "$PY" -u bridge/run_plan.py --cam "$CAM" >"$LOGS/bench.log" 2>&1 &
+if [ "$CAM" = "sim" ]; then BENCH_ARGS=(--sim); else BENCH_ARGS=(--cam "$CAM"); fi
+LAMINAR_REPO="$REPO" "$PY" -u bridge/run_plan.py "${BENCH_ARGS[@]}" >"$LOGS/bench.log" 2>&1 &
 pids+=($!)
 
 for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:5173/ && break; sleep 1; done

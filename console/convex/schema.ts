@@ -43,6 +43,8 @@ export default defineSchema({
     approvedVia: v.optional(v.string()),        // "button" | "voice" | "chat"
     report: v.optional(v.any()),                // the executor's run report
     summary: v.optional(v.string()),            // the agent's plain-words explanation afterwards
+    requestedBy: v.optional(v.string()),        // another lab, when the request came from its agent (remote.ts)
+    requestedVia: v.optional(v.string()),       // "asi-one" | "agent"
   })
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"]),
@@ -143,6 +145,16 @@ export default defineSchema({
   }).index("by_number", ["number"]),
 
   /** Chat thread for the WORK tab. One thread for v1. */
+  /** Other labs' agents that send requests (Fetch.ai uAgents / ASI:One), one chat thread each: remote.ts. */
+  remotes: defineTable({
+    threadId: v.string(),                       // "remote:<agent address>"
+    sender: v.string(),                         // the agent address the replies go back to
+    label: v.string(),                          // who it is, as the dashboard shows it ("Partner lab")
+    via: v.string(),                            // "asi-one" | "agent"
+    createdAt: v.number(),
+    lastSeenAt: v.number(),
+  }).index("by_thread", ["threadId"]),
+
   messages: defineTable({
     threadId: v.string(),
     role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool")),

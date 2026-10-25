@@ -61,7 +61,8 @@ export const report = mutation({
   },
   handler: async (ctx, args) => {
     const s = await latest(ctx);
-    const row = { ...args, t: Date.now() };
+    // busy / readHz are left out when they don't apply: clear them then (patch keeps fields it isn't given)
+    const row = { ...args, busy: args.busy, readHz: args.readHz, t: Date.now() };
     if (s) await ctx.db.patch(s._id, row);
     else await ctx.db.insert("benchStatus", row);
     // the containers ARE the calibrated boxes; their volume is what the camera reads (when it is sure)

@@ -51,9 +51,9 @@ export default function Audit() {
   }, [jobs]);
 
   function exportCsv() {
-    const rows = [["created", "request", "status", "approved_by", "via", "finished", "fail_reason", "summary"]];
+    const rows = [["created", "request", "requested_by", "status", "approved_by", "via", "finished", "fail_reason", "summary"]];
     for (const j of jobs ?? []) {
-      rows.push([new Date(j.createdAt).toISOString(), j.requestText, j.status, j.approvedBy ?? "", j.approvedVia ?? "",
+      rows.push([new Date(j.createdAt).toISOString(), j.requestText, j.requestedBy ?? "this lab", j.status, j.approvedBy ?? "", j.approvedVia ?? "",
                  j.finishedAt ? new Date(j.finishedAt).toISOString() : "", j.failReason ?? "", j.summary ?? ""]);
     }
     const csv = rows.map((r) => r.map((x) => JSON.stringify(String(x))).join(",")).join("\n");
@@ -91,7 +91,8 @@ export default function Audit() {
                   <button key={j._id} role="option" aria-selected={current?._id === j._id}
                           className={`audit-row ${current?._id === j._id ? "on" : ""}`} onClick={() => setSel(j._id)}>
                     <div className="r1"><span className="req">{j.requestText}</span>{statusTag(j)}</div>
-                    <div className="r2"><span>{ago(j.createdAt)}</span>{j.approvedBy && <span>approved by {j.approvedBy}</span>}
+                    <div className="r2"><span>{ago(j.createdAt)}</span>{j.requestedBy && <span>from {j.requestedBy}</span>}
+                      {j.approvedBy && <span>approved by {j.approvedBy}</span>}
                       <span>{(j.plan ?? []).length} steps</span></div>
                   </button>
                 ))}
@@ -118,6 +119,8 @@ function Detail({ job, events }: { job: Job; events: Doc<"events">[] }) {
       </div>
       <div className="kv">
         <div><div className="k">Asked</div><div className="v">{new Date(job.createdAt).toLocaleString()}</div></div>
+        <div><div className="k">Requested by</div><div className="v">{job.requestedBy
+          ? `${job.requestedBy} · ${job.requestedVia === "asi-one" ? "ASI:One" : "its agent"}` : "this lab"}</div></div>
         <div><div className="k">Approved by</div><div className="v">{job.approvedBy ? `${job.approvedBy}${job.approvedVia ? ` · ${job.approvedVia}` : ""}` : "—"}</div></div>
         <div><div className="k">Took</div><div className="v mono">{dur}</div></div>
         <div><div className="k">Measured</div><div className="v mono">

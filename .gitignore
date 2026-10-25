@@ -10,3 +10,5 @@ software/level_ref_sim.png
 sense/level_calib.json
 sense/level_ref.png
 sense/level_boxes.png
+fetch/reports/
+fetch/*_data.json

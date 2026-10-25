@@ -38,6 +38,7 @@ function useClosed(): [Set<string>, (id: string, closed: boolean) => void] {
 export default function Lab() {
   const messages = useQuery(api.messages.list, {}) as Msg[] | undefined;
   const pending = useQuery(api.jobs.pending, {});
+  const inbox = useQuery(api.remote.inbox, {});
   const send = useMutation(api.messages.send);
   const approve = useMutation(api.jobs.approve);
   const reject = useMutation(api.jobs.reject);
@@ -100,7 +101,17 @@ export default function Lab() {
   return (
     <div className="lab2">
       <div className="lab2-thread" role="log" aria-live="polite">
-        {messages?.length === 0 && <Welcome onPick={(t) => setDraft(t)} />}
+        {!!inbox?.length && (
+          <div className="remote-inbox">
+            <span className="x-eyebrow">Requests from other labs</span>
+            {inbox.map((r) => (
+              <Permission key={r.jobId} args={r.args as PlanArgs} approver={approver} closed={closed.has(r.jobId)}
+                          onClose={(c) => setClosed(r.jobId, c)} from={{ lab: r.from, via: r.via, request: r.request }}
+                          needName={() => setNote("Add your name next to the input first, so the approval is signed.")} />
+            ))}
+          </div>
+        )}
+        {messages?.length === 0 && !inbox?.length && <Welcome onPick={(t) => setDraft(t)} />}
         {messages?.map((m) => (
           <Message key={m._id} m={m} approver={approver} closed={closed} setClosed={setClosed}
                    needName={() => setNote("Add your name next to the input first, so the approval is signed.")} />
@@ -190,8 +201,10 @@ function Message({ m, approver, closed, setClosed, needName }: { m: Msg; approve
 }
 
 /** The plan as a permission request. × closes it; if no one decided, the pending pill keeps it in view. */
-function Permission({ args, approver, closed, onClose, needName }: { args: PlanArgs; approver: string; closed: boolean;
-                     onClose: (closed: boolean) => void; needName: () => void }) {
+type From = { lab: string; via: string; request: string };
+
+function Permission({ args, approver, closed, onClose, needName, from }: { args: PlanArgs; approver: string; closed: boolean;
+                     onClose: (closed: boolean) => void; needName: () => void; from?: From }) {
   const job = useQuery(api.jobs.get, { jobId: args.jobId });
   const rows = useQuery(api.steps.forJob, { jobId: args.jobId });
   const approve = useMutation(api.jobs.approve);
@@ -231,13 +244,14 @@ function Permission({ args, approver, closed, onClose, needName }: { args: PlanA
   return (
     <div className={`perm ${waiting ? "waiting" : ""}`} id={`perm-${args.jobId}`}>
       <div className="perm-head">
-        <span>Permission request</span>
+        <span>{from ? <>Request from <b>{from.lab}</b> <span className="x-muted">· {from.via === "asi-one" ? "via ASI:One" : "via its agent"}</span></> : "Permission request"}</span>
         <span className="x-grow" />
         {tag}
         <button className="x-icon-btn" aria-label="Close" title={waiting ? "Close (stays pending)" : "Close"} onClick={() => onClose(true)}><Close /></button>
       </div>
       <div className="perm-body">
         <div className="perm-title">{title}</div>
+        {from && <div className="x-small x-muted">“{from.request}”</div>}
         {args.pours.length > 0 && (
           <div className="perm-pours">
             {args.pours.map((p, i) => (

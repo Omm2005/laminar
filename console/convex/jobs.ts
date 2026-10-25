@@ -187,11 +187,14 @@ export const checkStalledInternal = internalMutation({
 
 /* -------------------- agent plans (agent.ts) and the robot runner (bridge/run_plan.py) -------------------- */
 
-/** The plan waiting for a person, newest first (null if none). */
+/** The Lab chat's plan waiting for a person, newest first (null if none). Other labs' requests are remote.inbox. */
 export const pending = query({
   args: {},
-  handler: async (ctx) => await ctx.db.query("jobs")
-    .withIndex("by_status", (q) => q.eq("status", "awaiting_approval")).order("desc").first(),
+  handler: async (ctx) => {
+    const waiting = await ctx.db.query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", "awaiting_approval")).order("desc").collect();
+    return waiting.find((j) => !j.threadId?.startsWith("remote:")) ?? null;
+  },
 });
 
 /** The job the robot is on now, or the latest one. */
@@ -211,8 +214,10 @@ export const createPlanInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     const first = args.pours[0];
+    const remote = await ctx.db.query("remotes").withIndex("by_thread", (q) => q.eq("threadId", args.threadId)).first();
     return await ctx.db.insert("jobs", {
       requestText: args.requestText, threadId: args.threadId,
+      ...(remote ? { requestedBy: remote.label, requestedVia: remote.via } : {}),
       targetMl: first?.ml ?? 0, channel: first?.container ?? 0, vial: first?.vial ?? 0,
       status: "queued", createdAt: Date.now(),
       plan: args.plan, pours: args.pours,
@@ -220,14 +225,16 @@ export const createPlanInternal = internalMutation({
   },
 });
 
-/** request_approval: the plan goes in front of a person; any older plan still waiting is replaced. */
+/** request_approval: the plan goes in front of a person; an older plan still waiting from the same chat is replaced
+ *  (another lab's request, or the technician's own, stays). */
 export const requestApprovalInternal = internalMutation({
   args: { jobId: v.id("jobs") },
   handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
     const waiting = await ctx.db.query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "awaiting_approval")).collect();
     for (const w of waiting) {
-      if (w._id !== args.jobId) {
+      if (w._id !== args.jobId && w.threadId === job?.threadId) {
         await ctx.db.patch(w._id, { status: "rejected", finishedAt: Date.now(), failReason: "replaced by a newer plan" });
       }
     }
