@@ -61,6 +61,13 @@ class ReplayCam:
 
 
 BOXES_FILE = HERE / "live_boxes.json"
+VIEW_MARGIN_PX = 60          # shown above the highest box: room for the labels and the banner
+
+
+def tray_top(boxes, margin: int = VIEW_MARGIN_PX) -> int:
+    """First image row worth showing: the views are cut off above the tray (the room behind it is just noise).
+    Only the picture is cut: the model reads the box crops of the full frame, so nothing it sees changes."""
+    return max(0, min(int(b[1]) for b in boxes) - margin)
 
 
 class VideoCam:
@@ -319,6 +326,7 @@ def draw(frame: np.ndarray, tracker, names: list[str], start_ml: dict, capacity_
         flow = shown_rate(state, n + "/s", flow)
         if sure and flow > 0:
             cv2.putText(img, f"+{flow:.2f}/s", (x, y + h + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.35, ORANGE, 1, cv2.LINE_AA)
+    img = img[tray_top([c.roi for c in tracker.columns.values()]):]     # only the tray, not the room above it
     # banner
     cv2.rectangle(img, (0, 0), (img.shape[1], 26), (30, 30, 30), -1)
     parts = []
@@ -515,6 +523,8 @@ def main():
                     writer = cv2.VideoWriter(a.save, cv2.VideoWriter_fourcc(*"avc1"), out_fps, size)   # H.264: QuickTime plays it
                     if not writer.isOpened():
                         writer = cv2.VideoWriter(a.save, cv2.VideoWriter_fourcc(*"mp4v"), out_fps, size)
+                if (view.shape[1], view.shape[0]) != size:              # boxes redrawn: the cut moved
+                    view = cv2.resize(view, size)
                 if live:
                     next_write = next_write or now
                     while next_write <= now:                        # repeat the view if the loop fell behind
