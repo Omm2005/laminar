@@ -129,22 +129,46 @@ def test_lock_in_averages_two_detections():
         assert np.linalg.norm(pose["containers"][cont] - true[i]) < 1.5
 
 
+class FakeArm:
+    """Commanded joints move instantly; the measured joints sag like the real arm under load."""
+    SAG = {1: 0.0, 2: 0.5, 3: -2.5, 4: -1.8, 5: 0.0, 6: 0.0}
+
+    def __init__(self, q):
+        self.cmd, self.runs = dict(q), 0
+
+    def current_joints(self):
+        return dict(self.cmd)
+
+    def status(self):
+        return {"state": {f"J{j}": self.cmd[j] + self.SAG[j] for j in range(1, 7)}}
+
+    def run(self, path):
+        assert max(abs(path.joints[0][j] - self.cmd[j]) for j in range(1, 7)) < 1.0  # starts where the arm is
+        self.cmd, self.runs = dict(path.final_joints), self.runs + 1
+        return {"result": "ok"}
+
+
 def test_settle_on_cancels_a_steady_sag(monkeypatch):
     import motion as M
+    monkeypatch.setattr(T.time, "sleep", lambda s: None)
     q0 = {1: -30.0, 2: 110.0, 3: 60.0, 4: 30.0, 5: 0.0, 6: 0.0}
     target, _ = M.fk_mm(q0)
-    sag = {1: 0.0, 2: 0.5, 3: -2.5, 4: -1.8, 5: 0.0, 6: 0.0}   # what the real arm does under load
+    err, offset = T.settle_on(FakeArm(q0), target, log=lambda *a: None)
+    assert err <= T.CORRECT_TOL_MM and np.linalg.norm(offset) > 10   # the command had to move to cancel the sag
 
-    class FakeArm:
-        def __init__(self):
-            self.cmd = dict(q0)
-        def current_joints(self):
-            return dict(self.cmd)
-        def status(self):
-            return {"state": {f"J{j}": self.cmd[j] + sag[j] for j in range(1, 7)}}
-        def run(self, path):
-            self.cmd = dict(path.final_joints)
 
+def test_every_container_lands_on_target_and_the_sag_is_learned(monkeypatch):
+    import motion as M
+    from spots import get_spot
     monkeypatch.setattr(T.time, "sleep", lambda s: None)
-    err = T.settle_on(FakeArm(), target, log=lambda *a: None)
-    assert err <= T.CORRECT_TOL_MM
+    q_scan = get_spot("vial_A_initial_position")
+    conts = {k: np.array([300.0, (k - 2.5) * 60]) for k in (1, 2, 3, 4)}
+    plans, _ = T.plan_visit(q_scan, conts, 64.0)   # the real table height
+    arm, learned, runs = FakeArm(q_scan), np.zeros(3), []
+    for n, (cont, plan) in enumerate(plans):
+        before = arm.runs
+        learned = T.run_container(arm, n, plan, None, learned, confirm=lambda *a: None, log=lambda *a: None)
+        runs.append(arm.runs - before)
+        p, _ = M.fk_mm({j: float(v) for j, v in {int(k[1:]): x for k, x in arm.status()["state"].items()}.items()})
+        assert np.linalg.norm(p - M.fk_mm(plan[-1].final_joints)[0]) <= T.CORRECT_TOL_MM + 0.5, cont
+    assert runs[-1] <= runs[0]   # pre-compensated from the last stop: no more correction moves than the first

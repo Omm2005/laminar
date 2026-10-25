@@ -594,12 +594,12 @@ def _plan_visit(q_scan, containers, table_z, workspace, tilt, hover_mm=HOVER_MM)
     return plans
 
 
-def settle_on(client, target_mm, log=print) -> float:
-    """Close the loop on the encoders: the arm sags under load (J3 ~2.5 deg, J4 ~2 deg at the tray, measured in
-    Tiger), so the tip stops ~17 mm short and ~35 mm low of the commanded point. Read where the tip really is,
-    move the command by the difference, repeat. Returns the final error (mm, measured)."""
+def settle_on(client, target_mm, log=print) -> tuple[float, np.ndarray]:
+    """Close the loop on the encoders: the arm sags under load, by an amount that depends on the pose, the load and
+    the motors at that moment (J3 ~2.5 deg, J4 ~2 deg at the tray, from the Tiger trace), so the tip stops short
+    and low of the commanded point. Read where the tip really is, move the command by the difference, repeat.
+    Returns (final measured error in mm, offset = commanded tip - target: the compensation that works HERE)."""
     target = np.asarray(target_mm, dtype=float)
-    planned, _ = M.fk_mm(client.current_joints())
     err = float("inf")
     for k in range(CORRECT_ITERS + 1):
         time.sleep(0.5)  # let the arm settle before reading it
@@ -613,12 +613,46 @@ def settle_on(client, target_mm, log=print) -> float:
         q_cmd = client.current_joints()
         p_cmd, _ = M.fk_mm(q_cmd)
         goal = p_cmd + miss
-        if np.linalg.norm(goal - planned) > CORRECT_MAX_MM:
-            log(f"    not correcting further: the command would move {np.linalg.norm(goal - planned):.0f} mm "
-                f"from the plan (> {CORRECT_MAX_MM:g})")
+        if np.linalg.norm(goal - target) > CORRECT_MAX_MM:
+            log(f"    not correcting further: the command would be {np.linalg.norm(goal - target):.0f} mm from the "
+                f"target (> {CORRECT_MAX_MM:g})")
             break
         client.run(M.plan_line(q_cmd, goal, None, speed_mm_s=10.0, label=f"correct {err:.0f} mm"))
-    return err
+    p_cmd, _ = M.fk_mm(client.current_joints())
+    return err, p_cmd - target
+
+
+def run_container(client, n: int, plan: list, workspace, learned, confirm=input, log=print) -> np.ndarray:
+    """Drive one planned container visit, measuring and correcting the sag after EVERY move that ends over the
+    marker, wherever the tray is:
+        to carry height (first container: the planned move from the scan pose; later: a lift)
+        travel above the marker  -> measure + correct   (the tip is over the marker before it descends)
+        lower to the hover point -> measure + correct   (lands HOVER_MM above the marker centre)
+    Each move is aimed at target + `learned`, the compensation measured at the previous stop, so it starts close;
+    the measurement then trims what is left at this place and moment. Returns the new learned offset."""
+    carry_t, R_t = M.fk_mm(plan[-2].final_joints)   # end of the travel: above the marker at carry height
+    hover_t, _ = M.fk_mm(plan[-1].final_joints)     # the hover point
+    learned = np.asarray(learned, dtype=float)
+
+    def go(path):
+        log("  " + path.summary())
+        confirm("  Enter to move ")
+        log("  " + str(client.run(path).get("result")))
+
+    if n == 0:
+        go(plan[0])
+    else:
+        q = client.current_joints()
+        p, _ = M.fk_mm(q)
+        go(M.plan_line(q, [p[0], p[1], carry_t[2] + learned[2]], None, speed_mm_s=M.DEFAULT_LIFT_SPEED,
+                       label="lift to carry height", workspace_mm=workspace))
+    go(M.plan_line(client.current_joints(), carry_t + learned, R_t, speed_mm_s=M.DEFAULT_TRAVEL_SPEED,
+                   label=plan[-2].label, workspace_mm=workspace))
+    _, learned = settle_on(client, carry_t, log)
+    go(M.plan_line(client.current_joints(), hover_t + learned, None, speed_mm_s=M.DEFAULT_LOWER_SPEED,
+                   label="lower over the marker", workspace_mm=workspace))
+    _, learned = settle_on(client, hover_t, log)
+    return learned
 
 
 def cmd_visit(a) -> None:
@@ -675,22 +709,17 @@ def cmd_visit(a) -> None:
         raise SystemExit(f"NOT MOVING: {e}") from None
     print("gripper pointing straight down" if tilt == 0 else
           f"gripper pointing down, tip leaning {tilt:g} deg outward (straight down is out of reach)")
+    learned = np.zeros(3)  # sag compensation that worked at the last stop (commanded - target, mm)
     for n, (cont, moves) in enumerate(plans):
         print(f"\ncontainer {cont}")
-        p_goal, _ = M.fk_mm(moves[-1].final_joints)  # the hover point itself, whatever the arm does to reach it
-        if client and n:  # the sag correction moved the arm off the plan: plan this container from where it is
-            try:
-                moves = _plan_visit(client.current_joints(), {cont: pose["containers"][cont]}, calib["table_z_mm"],
-                                    workspace, tilt, a.hover)[0][1]
-            except M.PlanError as e:
-                raise SystemExit(f"STOPPED before container {cont} (arm holds where it is): {e}") from None
-        for p in moves:
-            print("  " + p.summary())
-            if client:
-                input("  Enter to move ")
-                print("  " + str(client.run(p).get("result")))
-        if client:  # at the hover point: make the MEASURED tip land there, not just the command
-            settle_on(client, p_goal)
+        if not client:
+            for p in moves:
+                print("  " + p.summary())
+            continue
+        try:
+            learned = run_container(client, n, moves, workspace, learned)
+        except M.PlanError as e:
+            raise SystemExit(f"STOPPED at container {cont} (arm holds where it is): {e}") from None
     print("\ndone" + (": arm_server is holding above the last container (python arm_cmd.py rest to rest)"
                       if client else " (print only: add --run to move)"))
 
