@@ -69,8 +69,8 @@ STATE_MAX_AGE_S = 1.0  # teleop_state.json older than this = teleop.py is not ru
 MOVE_SPEED = 15.0      # deg/s for the joint move to the scan pose
 SWEEP_DEG = (0, 25, -25, 50, -50)  # visit: base turns (J1, from the scan pose) tried until the tray is seen
 LOCK_PHOTOS = 2        # visit: photos at the angle where the tray is first seen; their poses are averaged
-CORRECT_TOL_MM = 2.0   # visit: after each lower, nudge until the MEASURED tip is this close to the target ...
-CORRECT_ITERS = 3      # ... in at most this many small moves ...
+CORRECT_TOL_MM = 1.0   # visit: after each lower, nudge until the MEASURED tip is this close to the target ...
+CORRECT_ITERS = 5      # ... in at most this many small moves ...
 CORRECT_MAX_MM = 60.0  # ... never commanding the tip further than this from where it was planned
 
 
@@ -195,30 +195,21 @@ def marker_corners_mm(center, line_deg: float, size: float = MARKER_MM) -> np.nd
 
 
 def calibrate_from(touches: list[dict], photos: list[dict]) -> tuple[dict, dict]:
-    """touches: [{"pos", "id", "xy_mm", "z_mm"}] for 2+ tray positions; photos: [{"pos", "corners": {id: 4x2 px},
-    "dj1"?: deg}], one per position, all from the scan pose UNDER POWER (the joints sag ~2 deg under load, so a
-    hand-held photo sees from a different place), the base possibly turned by dj1 -> (calib, report).
-    Every marker corner seen is a pixel / table-mm pair for the homography; a photo taken with the base turned
-    pairs its pixels with the touches turned back by -dj1. Spread the tray positions over the area the tray may
-    be in: the map is only good where it was calibrated."""
+    """touches: [{"pos", "id", "xy_mm", "z_mm"}] for 1+ touched tray positions; photos: [{"pos", "corners":
+    {id: 4x2 px}, "dj1"?: deg}], one per position, all from the scan pose UNDER POWER (the joints sag ~2 deg under
+    load, so a hand-held photo sees from a different place), the base possibly turned by dj1 -> (calib, report).
+
+    Two kinds of photo pin down the homography (pixel -> table mm):
+      - a TOUCHED position: every marker corner seen is a pixel / table-mm pair (corners from the touched centre,
+        the 20 mm marker size and the tray line);
+      - an UNTOUCHED position (no touches for that pos): the tray's position and heading there are unknowns, and
+        every corner must land on the tray's known shape (layout + 20 mm squares). No touching needed, so the tray
+        can be photographed at many spots to make the map good everywhere it may be.
+    Both are solved together (least squares). A photo taken with the base turned by dj1 is turned back by -dj1."""
     at = {}
     for t in touches:
         at.setdefault(t["pos"], {})[t["id"]] = np.asarray(t["xy_mm"], dtype=float)
-    px, xy, centres = [], [], []
-    for ph in photos:
-        pts, dj1 = at[ph["pos"]], ph.get("dj1", 0.0)
-        d = pts[max(pts)] - pts[min(pts)]
-        line = math.degrees(math.atan2(d[1], d[0]))
-        for i, c in ph["corners"].items():
-            px.append(np.asarray(c, dtype=float))
-            xy.append(rotate_about_base(marker_corners_mm(pts[i], line), -dj1))
-            centres.append((ph["pos"], i, dj1, marker_center(c)))
-    H, err = fit_homography(np.vstack(px), np.vstack(xy))
-    # the error that matters: each marker centre found through the map vs. where the tip touched it
-    points = {f"tray {p} marker {i}": float(np.linalg.norm(rotate_about_base(px_to_mm(H, [c])[0], dj1) - at[p][i]))
-              for p, i, dj1, c in centres}
-    # layout from the first position; the others, fitted onto it, say how rigid the tray (and the touching) is,
-    # and are averaged in
+    # the tray layout from the touched positions (first one, the others fitted onto it and averaged in)
     ref, others = min(at), [p for p in sorted(at) if p != min(at)]
     layout = tray_layout(at[ref])
     rigid = [tray_pose(layout, at[p])["rms_mm"] for p in others if len(at[p]) >= 2]
@@ -228,11 +219,70 @@ def calibrate_from(touches: list[dict], photos: list[dict]) -> tuple[dict, dict]
         for i in at[p]:
             sums[i].append(rot(ang).T @ (at[p][i] - t))
     layout = {i: np.mean(v, axis=0) for i, v in sums.items()}
+    shape = {i: layout[i] + (MARKER_MM / 2) * SQUARE for i in layout}  # corners in the tray frame (x = tray line)
+
+    touched = [ph for ph in photos if ph["pos"] in at]
+    untouched = [ph for ph in photos if ph["pos"] not in at]
+    px, xy = [], []
+    for ph in touched:
+        pts = at[ph["pos"]]
+        d = pts[max(pts)] - pts[min(pts)]
+        line = math.degrees(math.atan2(d[1], d[0]))
+        for i, c in ph["corners"].items():
+            px.append(np.asarray(c, dtype=float))
+            xy.append(rotate_about_base(marker_corners_mm(pts[i], line), -ph.get("dj1", 0.0)))
+    H, _ = fit_homography(np.vstack(px), np.vstack(xy))
+
+    def mapped(Hm, ph, ids):
+        return [rotate_about_base(px_to_mm(Hm, ph["corners"][i]), ph.get("dj1", 0.0)) for i in ids]
+
+    if untouched:
+        from scipy.optimize import least_squares
+        poses0 = []
+        for ph in untouched:  # start each tray pose from the touched-only map
+            ids = sorted(ph["corners"])
+            c = [m.mean(axis=0) for m in mapped(H, ph, ids)]
+            ang, t, _ = rigid_fit([layout[i] for i in ids], c)
+            poses0 += [math.radians(ang), t[0], t[1]]
+
+        def unpack(x):
+            return np.append(x[:8], 1.0).reshape(3, 3), x[8:].reshape(-1, 3)
+
+        def resid(x):
+            Hm, poses = unpack(x)
+            out = [(px_to_mm(Hm, np.vstack(px)) - np.vstack(xy)).ravel()]  # touched corners, scan-pose frame
+            for ph, (a, tx, ty) in zip(untouched, poses):               # untouched: the tray's known shape
+                R = rot(math.degrees(a))
+                for i, m in zip(sorted(ph["corners"]), mapped(Hm, ph, sorted(ph["corners"]))):
+                    out.append((m - (shape[i] @ R.T + [tx, ty])).ravel())
+            return np.concatenate(out)
+
+        x0 = np.concatenate([(H / H[2, 2]).ravel()[:8], poses0])
+        H = unpack(least_squares(resid, x0, x_scale="jac").x)[0]
+
+    # how good is it: touched marker centres vs. the map; untouched photos: corners vs. the tray's true shape,
+    # and the 20 mm marker sides as the map measures them
+    points = {}
+    for ph in touched:
+        for i, c in ph["corners"].items():
+            got = rotate_about_base(px_to_mm(H, [marker_center(c)])[0], ph.get("dj1", 0.0))
+            points[f"tray {ph['pos']} marker {i}"] = float(np.linalg.norm(got - at[ph["pos"]][i]))
+    shape_err, sides = [], []
+    for ph in untouched:
+        ids = sorted(ph["corners"])
+        m = mapped(H, ph, ids)
+        ang, t, _ = rigid_fit(np.vstack([shape[i] for i in ids]), np.vstack(m))
+        R = rot(ang)
+        shape_err += [float(np.linalg.norm(p - (q @ R.T + t))) for i, mm in zip(ids, m)
+                      for p, q in zip(mm, shape[i])]
+        sides += [float(np.linalg.norm(mm[k] - mm[(k + 1) % 4])) for mm in m for k in range(4)]
     zs = [t["z_mm"] for t in touches]
     e = np.array(list(points.values()))
     calib = {"homography": H, "layout_mm": layout, "table_z_mm": float(np.mean(zs))}
     report = {"points": points, "homography_rms_mm": float(np.sqrt(np.mean(e ** 2))),
-              "homography_max_mm": float(e.max()), "corner_rms_mm": float(np.sqrt(np.mean(err ** 2))),
+              "homography_max_mm": float(e.max()),
+              "shape_rms_mm": float(np.sqrt(np.mean(np.square(shape_err)))) if shape_err else None,
+              "marker_side_mm": (float(min(sides)), float(max(sides))) if sides else None,
               "tray_rigid_rms_mm": float(np.mean(rigid)) if rigid else None,
               "table_z_spread_mm": float(max(zs) - min(zs))}
     return calib, report

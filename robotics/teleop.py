@@ -271,6 +271,7 @@ def main():
     except Exception as e:  # leader/follower errors and CAN adapter failures all end the session safely
         print(f"\nSTOPPING: {e!r}")
     finally:
+        at_rest = not enabled
         try:
             if enabled:
                 rest = dict.fromkeys(ids, 0.0)
@@ -282,10 +283,14 @@ def main():
                 while time.time() < t_end:
                     send_all()
                     time.sleep(dt)
+                at_rest = True
         except BaseException as e:
             print(f"Return to zero aborted: {e!r}")
         finally:
-            if enabled:
+            if enabled and not at_rest:  # never drop the arm: the motors keep holding their last command
+                print("NOT AT REST - follower motors left HOLDING their last position (not disabled). Support the "
+                      "arm, then run rest_arm.py.")
+            elif enabled:
                 failed = []
                 for mid in ids:
                     try:

@@ -63,6 +63,12 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
+# Lost feedback never drops the arm: hold the commanded pose with torque for FEEDBACK_GRACE_S waiting for it to come
+# back, then ease to rest on commands alone (the motors still obey commands when only the replies are lost), and
+# disable only once the arm has been brought to rest. If the return to rest can't finish, the motors are LEFT
+# HOLDING their last command rather than disabled: a stalled arm is recoverable, a dropped one is not.
+FEEDBACK_GRACE_S = 2.0
+BLIND_REST_SPEED = 8.0   # deg/s for the return to rest without feedback (15 with it)
 IDLE_TIMEOUT_S = 15 * 60
 # follower motor-frame soft limits (degrees from zero), same as teleop
 LIMITS = {mid: lim for (mid, _scale, lim) in MAPPING.values()}
@@ -137,7 +143,15 @@ def main():
                     tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
                 bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
 
+    resting = {"now": False}  # True during the final return to rest: nothing may abort it (see FEEDBACK_GRACE_S)
+
+    def feedback_fresh():
+        now = time.time()
+        return all(mid in bus.state and now - bus.state[mid]["t"] <= FEEDBACK_TIMEOUT for mid in ids)
+
     def check():
+        if resting["now"]:  # going to rest is the safe outcome of every fault: let it finish
+            return
         now = time.time()
         for mid in ids:
             st = bus.state.get(mid)
@@ -443,15 +457,35 @@ def main():
         print(last["result"], flush=True)
     finally:
         STOP_FILE.unlink(missing_ok=True)  # otherwise check() would abort the return to rest
+        at_rest = not enabled
         try:
             if enabled:
                 last["op"] = "rest"
-                frm = dict(cmd)
-                move(dict.fromkeys(frm, 0.0), 15.0, "return to rest")
-                hold(0.3)
+                resting["now"] = True
+                if not feedback_fresh():  # hold where we are, with torque, and give the feedback a chance
+                    print(f"no feedback: holding the arm in place for up to {FEEDBACK_GRACE_S:g} s", flush=True)
+                    end = time.time() + FEEDBACK_GRACE_S
+                    while time.time() < end and not feedback_fresh():
+                        tick()
+                    if not feedback_fresh():
+                        print(f"still no feedback: easing to rest on commands alone at {BLIND_REST_SPEED:g} deg/s",
+                              flush=True)
+                move(dict.fromkeys(cmd, 0.0), 15.0 if feedback_fresh() else BLIND_REST_SPEED, "return to rest")
+                hold(0.5)
+                at_rest = True
         except BaseException as e:
             print(f"return to rest aborted: {e!r}", flush=True)
-        if enabled:
+        if enabled and not at_rest:
+            # never drop the arm: leave every motor holding its last command
+            msg = ("NOT AT REST - motors left HOLDING their last position (not disabled). Support the arm, then run "
+                   "rest_arm.py (or replug the CAN adapter first if it stopped answering).")
+            last["result"] = (last.get("result") or "") + " | " + msg
+            try:
+                write_status()
+            except Exception:
+                pass
+            print(msg, flush=True)
+        elif enabled:
             failed = []
             for mid in ids:
                 try:

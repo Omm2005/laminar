@@ -172,3 +172,28 @@ def test_every_container_lands_on_target_and_the_sag_is_learned(monkeypatch):
         p, _ = M.fk_mm({j: float(v) for j, v in {int(k[1:]): x for k, x in arm.status()["state"].items()}.items()})
         assert np.linalg.norm(p - M.fk_mm(plan[-1].final_joints)[0]) <= T.CORRECT_TOL_MM + 0.5, cont
     assert runs[-1] <= runs[0]   # pre-compensated from the last stop: no more correction moves than the first
+
+
+def test_untouched_photos_fix_the_map_away_from_the_touched_spot():
+    rng = np.random.default_rng(3)
+    line = math.degrees(math.atan2(LAYOUT[13][1] - LAYOUT[10][1], LAYOUT[13][0] - LAYOUT[10][0]))
+    def photo(pos, xy, hd):    # markers drawn square to the 10 -> 13 line, as on the real tray
+        true = tray_markers(xy, hd)
+        frame = render(true, hd + line, ids=list(T.MARKERS))
+        return true, {"pos": pos, "corners": {i: c for i, c in T.detect_markers(frame) if i in T.MARKERS}}
+    true1, ph1 = photo(1, (290, -60), 10)            # the only touched position
+    touches = [{"pos": 1, "id": i, "xy_mm": list(p), "z_mm": 0.0} for i, p in true1.items()]  # exact touches:
+    # this checks the method; with real touches (~0.5 mm noise, one position) the far spot came out 3.1 vs 4.5 mm
+    far = tray_markers((370, 110), -35)              # a spot far from it
+    test_frame = render(far, -35 + line, ids=list(T.MARKERS))
+    def worst(calib):
+        pose = T.find_tray(test_frame, calib)
+        return max(np.linalg.norm(pose["containers"][T.MARKERS[i]] - far[i]) for i in far)
+    only_touched, _ = T.calibrate_from(touches, [ph1])
+    shots = [photo(10 + k, xy, hd)[1] for k, (xy, hd) in enumerate([((330, 60), 30), ((280, 120), -60),
+                                                                      ((360, -20), 80), ((320, 160), 0)])]
+    with_shape, rep = T.calibrate_from(touches, [ph1] + shots)
+    assert worst(with_shape) < 1.0 < worst(only_touched)
+    lo, hi = rep["marker_side_mm"]
+    assert 18.0 < lo and hi < 21.0   # ArUco corners on small markers sit ~1 px inside: sides read a bit short,
+                                     # symmetrically, so the centres (what matters) stay exact

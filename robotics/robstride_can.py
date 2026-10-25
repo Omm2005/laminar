@@ -82,6 +82,7 @@ class RobStrideBus:
         # (USB I/O error, then no TX at all until replugged).
         self._usb_lock = threading.Lock()
         self._rx = queue.Queue()
+        self.rx_errors, self.last_rx_error = 0, None  # USB read errors survived by the receive thread
         self._running = True
         self._thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._thread.start()
@@ -91,10 +92,19 @@ class RobStrideBus:
             try:
                 with self._usb_lock:
                     msg = self.bus.recv(0.001)
-            except Exception:
+            except Exception as e:
                 if not self._running:
                     return
-                raise
+                # Never let a USB read error end this thread: it used to, silently, and then no feedback ever
+                # arrived while commands still went out, so the caller saw "lost feedback" and disabled motors
+                # that were holding the arm up (2026-10-24: the arm dropped). Count it, back off, keep reading.
+                self.rx_errors += 1
+                self.last_rx_error = repr(e)
+                if self.rx_errors in (1, 10, 100) or self.rx_errors % 1000 == 0:
+                    print(f"[robstride_can] CAN read error #{self.rx_errors}: {e!r} (still reading)",
+                          file=sys.stderr, flush=True)
+                time.sleep(0.01)
+                continue
             if msg is not None:
                 r = self._handle(msg)
                 if r and r[0] != T_FEEDBACK:
