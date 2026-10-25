@@ -198,7 +198,8 @@ def main():
             "can_rx_errors": getattr(bus, "rx_errors", None),  # USB read errors the CAN receive thread survived
             "gripper": {"target": round(grip["target"], 1), "torque_limit": grip["limit"],
                         "pos": round(rel(GRIPPER), 1) if st7 else None,
-                        "vel_rad_s": round(st7.get("vel", 0.0), 3), "torque": round(st7.get("torque", 0.0), 2)},
+                        "vel_rad_s": round(st7.get("vel", 0.0), 3), "torque": round(st7.get("torque", 0.0), 2),
+                        "mode": st7.get("mode"), "fault": st7.get("fault")},
             **extra,
         }
         tmp = STATUS_FILE.with_suffix(".tmp")
