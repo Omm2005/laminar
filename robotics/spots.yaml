@@ -23,8 +23,8 @@ wells:
   well_3: null
   well_4: null
 vials:
-  vial_A_initial_position: [14.7, 99.8, 26.5, 71.471, -0.975, 4.22]
-  vial_B_initial_position: [14.5, 92.3, 33.9, 51.6, -11.4, 0.5]
+  vial_A_initial_position: [14.8, 99.49, 27.13, 74.517, 3.769, 11.4]
+  vial_B_initial_position: [14.934, 103.009, 29.202, 77.496, -6.5, 12.2]
   vial_A_final_position: [-54.075, 127.615, 35.552, 91.063, -50.102, -1.771]
   vial_C_initial_position: [14.7, 95.685, 38.398, 50.2, -19.602, 1.799]
   vial_D_initial_position: [34.841, 104.918, 37.032, 70.504, 19.0, -11.9]

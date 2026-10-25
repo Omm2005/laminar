@@ -16,6 +16,7 @@ slowed down if any joint step would exceed the server's speed limit. Units: degr
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path as FilePath
@@ -26,6 +27,8 @@ from paths import load, names
 from spots import save_spot
 
 HERE = FilePath(__file__).resolve().parent
+REST_DEG = 5.0   # shoulder, elbow and wrist pitch (J2-J4) within this of 0 = folded at rest (J1/J5/J6 may
+#                  sit a few deg off under teleop): where a grab motion starts
 
 
 def cut_motion(rec: FilePath, frame: int | None = None, fps: float = 20.0) -> tuple[list[dict[int, float]], float, int]:
@@ -36,11 +39,21 @@ def cut_motion(rec: FilePath, frame: int | None = None, fps: float = 20.0) -> tu
     if not 0 <= end < len(rows):
         raise SystemExit(f"frame {end} is outside the recording (0..{len(rows) - 1})")
     pts = [joints(r) for r in rows[: end + 1]]
+    # one teleop session can hold several grabs (rest -> vial A, back to rest, rest -> vial B, ...): start from
+    # the last time the arm was at rest before `end`
+    at_rest = [i for i, q in enumerate(pts) if max(abs(q[m]) for m in (2, 3, 4)) <= REST_DEG]
+    if at_rest:
+        pts = pts[at_rest[-1]:]
     first = next((i for i, q in enumerate(pts) if max(abs(q[m] - pts[0][m]) for m in q) > IDLE_DEG), len(pts) - 1)
     pts = pts[max(0, first - 1):]
-    worst = max((max(abs(b[m] - a[m]) for m in range(1, 7)) for a, b in zip(pts, pts[1:])), default=0.0)
-    hz = fps if worst * fps <= REPLAY_MAX_DEG_S else REPLAY_MAX_DEG_S / worst
-    return pts, hz, end
+    # a step faster than the replay limit (a leader glitch, a quick flick) is split into in-between points at the
+    # recording rate, so only that moment slows down, not the whole motion
+    smooth = [pts[0]]
+    for a, b in zip(pts, pts[1:]):
+        step = max(abs(b[m] - a[m]) for m in range(1, 7))
+        n = max(1, math.ceil(step * fps / REPLAY_MAX_DEG_S))
+        smooth += [{m: a[m] + (b[m] - a[m]) * k / n for m in a} for k in range(1, n + 1)]
+    return smooth, fps, end
 
 
 def write_motion(name: str, label: str, source: str, hz: float, pts: list[dict[int, float]]) -> FilePath:
