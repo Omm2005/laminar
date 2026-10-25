@@ -18,6 +18,19 @@ pour:
   # side-camera column (as clicked in `python -m laminar.pour_motor6 calibrate`) showing each compartment;
   # the camera pour fills that column. Calibrate every column here, or the wrong-column check can't see it.
   columns: {well_1: A, well_2: B, well_3: C, well_4: D}
+  # the level model (sense/level_seg.onnx) reads the boxes drawn in `python live_view.py --new-boxes`
+  # (sense/live_boxes.json), named A, B, C, ... left to right: draw one box per compartment above.
+  capacity_ml: 4.5     # mL in a full compartment (box rim to floor)
+  max_tilt_deg: 85     # never roll further than this from upright
+
+# where the arm carries a vial to pour into each compartment: a spot taught by teleop (spots.yaml). The four
+# vial_X_final_position spots run left to right, so they are taken to be over compartments 1-4. CHECK on the bench.
+pour_spots: {well_1: vial_A_final_position, well_2: vial_B_final_position, well_3: vial_C_final_position, well_4: vial_D_final_position}
+
+# real-arm skills (software/laminar/real_skills.py)
+gripper_open_deg: 78   # jaws open wide enough to go around a vial (arm_server gripper degrees)
+approach_mm: 80        # pick / place: come down onto the slot from this far above it
+vial_ml: 8             # mL in a vial at the start (until the vials report their own volume)
 
 routes:
   vial_A: {well_1: null, well_2: null, well_3: null, well_4: null}

@@ -78,7 +78,10 @@ class Pending:
 # ---------------------------------------------------------------- bench view
 
 def bench_view(system: System) -> dict:
-    """What the agent can say about the bench: vials by slot, liquids, volumes, the station tube."""
+    """What the agent can say about the bench: vials by slot, liquids, volumes, the station tube.
+    Real arm: the skills describe it (vials, compartments as `targets`, measured routes, what is not set up)."""
+    if hasattr(system.skills, "bench_view"):
+        return system.skills.bench_view()
     world = getattr(system.skills, "world", None)
     station = system.bench["station"]
     view = {"station_target": station["target_id"], "station_tube": station["tube_type"],
@@ -93,12 +96,25 @@ def bench_view(system: System) -> dict:
     return view
 
 
+def targets_of(view: dict) -> dict[str, dict]:
+    """Where liquid can go: the real compartments, or the fakes' single station tube."""
+    return view.get("targets") or {view["station_target"]: {"capacity_ml": view["tube_capacity_ml"]}}
+
+
 def describe_bench(view: dict) -> str:
     if not view["vials"]:
         return "The rack is empty."
-    lines = [f"- {vid} in slot {v['slot']}: {v['liquid']}, {v['ml']:g} mL" for vid, v in view["vials"].items()]
-    return ("On the bench:\n" + "\n".join(lines)
-            + f"\nPour station: {view['station_target']} ({view['station_tube']}, holds {view['tube_capacity_ml']:g} mL).")
+    lines = [f"- {vid} in {'' if str(v['slot']).startswith('slot') else 'slot '}{v['slot']}: {v['liquid']}, "
+             f"{v['ml']:g} mL" for vid, v in view["vials"].items()]
+    if not view.get("real"):
+        return ("On the bench:\n" + "\n".join(lines) + f"\nPour station: {view['station_target']} "
+                f"({view['station_tube']}, holds {view['tube_capacity_ml']:g} mL).")
+    t = targets_of(view)
+    out = ("On the bench:\n" + "\n".join(lines) + "\nCompartments: "
+           + ", ".join(f"{k} (camera column {d.get('column', '?')}, {d['capacity_ml']:g} mL)" for k, d in t.items()) + ".")
+    if view.get("not_ready"):
+        out += "\nNot set up yet (real jobs will be refused):\n- " + "\n- ".join(view["not_ready"])
+    return out
 
 
 # ---------------------------------------------------------------- interpreting a request
@@ -126,14 +142,38 @@ def parse_request(text: str, view: dict) -> Intent:
     m = _ML.search(t)
     liquids = sorted({v["liquid"] for v in view["vials"].values()} | COLORS)
     liquid = next((c for c in liquids if re.search(rf"\b{c}\b", t)), None)
-    vial = next((vid for vid in view["vials"] if re.search(rf"\b{vid.lower()}\b", t)), None)
-    target = view["station_target"] if view["station_target"].lower() in t.replace(" ", "") or "tube" in t else None
+    vial = next((vid for vid in view["vials"] if re.search(rf"\b{vid.lower()}\b", t)
+                 or re.search(rf"\b{vid.lower().replace('_', ' ')}\b", t)), None)
+    target = find_target(t, view)
     if not m and not liquid and not vial:
         return Intent("unclear", note="I can pour a measured volume from a vial into the station tube, "
                                       "e.g. 'pour 2 mL of blue into tube1'.")
     if not m:
         return Intent("unclear", note="How many mL? e.g. 'pour 2 mL of blue'.")
     return Intent("plan", vial_id=vial, liquid=liquid, ml=float(m.group(1)), target=target)
+
+
+def find_target(t: str, view: dict) -> str | None:
+    """The target named in a lowercase request: the station tube ('tube1', 'the tube'), or a compartment
+    ('well 2', 'well_2', 'compartment 2', 'column C')."""
+    targets = targets_of(view)
+    squashed = t.replace(" ", "").replace("_", "")
+    for name in targets:
+        if name.lower().replace("_", "") in squashed:
+            return name
+    m = re.search(r"\b(?:well|compartment|channel)\s*#?\s*(\d)\b", t)
+    if m:
+        hit = [n for n in targets if re.fullmatch(rf"[a-z]+_?{m.group(1)}", n.lower())]
+        if hit:
+            return hit[0]
+    m = re.search(r"\bcolumn\s+([a-h])\b", t)
+    if m:
+        hit = [n for n, d in targets.items() if str(d.get("column", "")).lower() == m.group(1)]
+        if hit:
+            return hit[0]
+    if not view.get("real") and "tube" in t:
+        return view["station_target"]
+    return None
 
 
 INTENT_SCHEMA = {
@@ -159,7 +199,9 @@ def claude_interpreter(client=None) -> Callable[[str, dict], Intent]:
     import anthropic
     client = client or anthropic.Anthropic()
     system = ("You turn a lab technician's chat message into an Intent for a robot arm that pours liquid from a "
-              "vial into a tube. Use only vial ids, liquids and targets that exist in the bench JSON. "
+              "vial into a target: the station tube, or one of the compartments under 'targets' in the bench JSON "
+              "(a compartment may be named by its camera column letter, e.g. 'column C'). "
+              "Use only vial ids, liquids and targets that exist in the bench JSON. "
               "action 'plan' needs ml; if the vial or volume is ambiguous, use action 'unclear' and put a short "
               "question in note. 'approve <id>' / 'cancel <id>' carry the 6-character plan id in plan_id. "
               "Never invent a volume the user did not give.")
@@ -198,13 +240,16 @@ def build_plan(intent: Intent, view: dict, request: str) -> tuple[dict | None, s
         return None, f"vial {vial} is not on the bench"
     v = view["vials"][vial]
     target = intent.target or view["station_target"]
+    if target is None:
+        return None, "into which compartment? " + ", ".join(
+            f"{k} (column {d.get('column', '?')})" for k, d in targets_of(view).items())
     ml = round(float(intent.ml), 2)
     plan = {
         "plan_id": uuid.uuid4().hex[:6],
         "request": request.strip()[:200],
         "steps": [
             {"skill": "pick", "args": {"vial_id": vial}},
-            {"skill": "carry", "args": {"to": "station"}},
+            {"skill": "carry", "args": {"to": target if view.get("real") else "station"}},
             {"skill": "pour", "args": {"target": target, "ml": ml, "liquid": v["liquid"]}},
             {"skill": "verify", "args": {"target": target, "expect_ml": ml, "tol": DEFAULT_TOL_ML}},
             {"skill": "carry", "args": {"to": "rack"}},
@@ -216,8 +261,9 @@ def build_plan(intent: Intent, view: dict, request: str) -> tuple[dict | None, s
 
 def validate_plan(plan: dict, view: dict) -> list[str]:
     """Problems with a plan against the bench as it is now; empty = valid. Also passed to the Executor."""
-    problems, holding, poured = [], None, 0.0
-    known = {"pick", "carry", "pour", "verify", "place"}
+    problems, holding, poured = [], None, {}
+    known = {"pick", "carry", "pour", "verify", "place", "lift", "lower"}
+    targets = targets_of(view)
     for i, s in enumerate(plan.get("steps", [])):
         skill, args = s.get("skill"), s.get("args", {})
         where = f"step {i + 1} ({skill})"
@@ -226,9 +272,25 @@ def validate_plan(plan: dict, view: dict) -> list[str]:
         elif skill == "pick":
             if holding:
                 problems.append(f"{where}: already holding {holding}")
-            if args.get("vial_id") not in view["vials"]:
+            v = view["vials"].get(args.get("vial_id"))
+            if v is None:
                 problems.append(f"{where}: vial {args.get('vial_id')} not on the bench")
+            elif v.get("taught") is False:
+                problems.append(f"{where}: {v['slot']} (where {args.get('vial_id')} is grabbed) is not taught "
+                                "in spots.yaml")
             holding = args.get("vial_id")
+        elif skill in ("lift", "lower"):
+            mm = args.get("mm")
+            if not isinstance(mm, (int, float)) or not 1 <= mm <= 150:
+                problems.append(f"{where}: move between 1 and 150 mm")
+        elif skill == "carry":
+            to = args.get("to")
+            if to not in ("station", "rack", "home") and to not in targets:
+                problems.append(f"{where}: unknown destination {to}")
+            routes = view.get("routes")
+            if routes is not None and to in targets and to not in routes.get(holding, []):
+                problems.append(f"{where}: the arm has no taught way to carry {holding} to {to} "
+                                "(layout.yaml pour_spots / spots.yaml)")
         elif skill == "pour":
             ml = args.get("ml")
             if not holding:
@@ -241,17 +303,20 @@ def validate_plan(plan: dict, view: dict) -> list[str]:
                     problems.append(f"{where}: {holding} has {v.get('ml', 0):g} mL; keep 0.5 mL in the vial")
                 if args.get("liquid") != v.get("liquid"):
                     problems.append(f"{where}: {holding} holds {v.get('liquid')}, not {args.get('liquid')}")
-                poured += ml
-            if args.get("target") != view["station_target"]:
-                problems.append(f"{where}: target {args.get('target')} is not the station tube")
+                poured[args.get("target")] = poured.get(args.get("target"), 0.0) + ml
+            if args.get("target") not in targets:
+                problems.append(f"{where}: target {args.get('target')} is not "
+                                + ("a compartment" if view.get("real") else "the station tube"))
         elif skill == "place":
             if args.get("vial_id") != holding:
                 problems.append(f"{where}: not holding {args.get('vial_id')}")
             if args.get("slot") not in view["slots"]:
                 problems.append(f"{where}: unknown slot {args.get('slot')}")
             holding = None
-    if poured > view["tube_capacity_ml"]:
-        problems.append(f"plan pours {poured:g} mL; the station tube holds {view['tube_capacity_ml']:g} mL")
+    for t, ml in poured.items():
+        cap = targets.get(t, {}).get("capacity_ml")
+        if cap is not None and ml > cap:
+            problems.append(f"plan pours {ml:g} mL into {t}; it holds {cap:g} mL")
     if holding:
         problems.append(f"plan ends still holding {holding}")
     return problems

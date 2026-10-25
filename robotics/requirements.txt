@@ -5,3 +5,6 @@ libusb-package
 motorbridge-smart-servo
 opencv-contrib-python  # cv2.aruco for vision.py; replaces opencv-python (never install both)
 numpy
+pyyaml
+pillow       # vision.py: printable marker sheet
+matplotlib   # vision.py: font for the marker sheet

@@ -12,12 +12,35 @@ Interfaces + fakes, executor state machine, validator, Claude agent + 4 tools, t
 | `laminar/safety.py` | `Watchdog` (ESTOP or 250 ms silence → `arm.stop()`) + `FakeHeartbeat` |
 | `laminar/telemetry.py` | `log(event, data)` → `logs/telemetry.jsonl` |
 | `laminar/bench.py` | Loads `robotics/bench.yaml` |
-| `laminar/hardware.py` | `make_system()` — fake or real (`LAMINAR_FAKE=0`, not wired yet) |
+| `laminar/hardware.py` | `make_system()` — fake, or the real arm with `LAMINAR_FAKE=0` (`LAMINAR_CAM` = side camera) |
+| `laminar/real_skills.py` | `RealSkills`: pick / carry / pour / verify / place on the real arm (arm_server, spots.yaml, layout.yaml, camera pour with the level model) |
+| `laminar/chat.py` | Type to the lab agent in the terminal, simulated or real (`--real`), rules or Claude (`--claude`) |
 | `laminar/demo.py` | Runs one job on the fakes, no executor |
 | `laminar/executor.py` | State machine: preconditions → skill → success check, abort to safe pose, run report |
 | `laminar/run.py` | Runs a `plans/*.json` through the executor |
 
 Real implementations (Avery in `robotics/`, Amogh in `sense/`) subclass `Arm`, `LevelTracker`, `Skills`, `HeartbeatSource`.
+
+## Real arm: from a sentence to a pour
+
+```
+"pour 1 ml of blue into well 2"  ->  Intent (rules, or Claude with --claude)  ->  plan built by code
+  ->  validate_plan (vial, slot taught, route measured, volume, capacity)  ->  you approve
+  ->  Executor: pick -> carry -> pour (camera) -> verify -> carry back -> place   (any failure: wrist upright, hold)
+```
+
+Bring-up, once (on the bench):
+
+1. `cd robotics && python mac_run.py arm_server.py` (Windows/Linux: `python arm_server.py`), leave it running.
+2. Teach where each vial is grabbed: record a grab with teleop, then
+   `python move.py from-recording slot_A recordings/<run>/data.csv` (slot_B, ...).
+3. Measure `routes:` in `robotics/layout.yaml`: mm from each vial's slot to above each compartment.
+   Check `pour.direction`, `gripper_open_deg`, `approach_mm`, `vials:` (which liquid each holds).
+4. Side camera: `cd sense && python live_view.py --cam 0 --new-boxes`, one box per compartment, A-D left to right.
+5. `python -m laminar.chat --real --check` lists anything still missing.
+
+Then: `python -m laminar.chat --real --cam 0` (add `--claude` with `ANTHROPIC_API_KEY` set for free-form requests).
+Without hardware, `pytest tests/test_real_skills.py` runs whole real-arm jobs on a stand-in arm_server and camera.
 
 ## Run it
 

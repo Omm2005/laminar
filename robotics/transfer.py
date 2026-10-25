@@ -5,15 +5,16 @@
     -> lift 60 -> shift (-dx, -dy) -> lower 100
 
 (dx, dy) comes from layout.yaml (the only bench measurements needed). All six moves are planned, and the
-camera calibration and the camera checked, before the arm moves; each move is played continuously by
-arm_server.py ("path" op). The grab before and the release after are separate (recorded) steps.
+camera checked, before the arm moves; each move is played continuously by arm_server.py ("path" op).
+The grab before and the release after are separate (recorded) steps.
 
 The pour fills the compartment's camera column (layout.yaml pour.columns) to --target of full, slowing as
 it fills, and tilts back upright when done or on wrong column / overfill / camera lost / no flow. The tube
 is carried back in every case, except an error from the arm itself (then it holds where it is).
 
-Run from robotics/ with arm_server.py running and the tube already gripped in its slot. Calibrate the
-side camera first:  cd software && python -m laminar.pour_motor6 calibrate --cam <index>
+Run from robotics/ with arm_server.py running and the tube already gripped in its slot. The side camera
+needs no calibration: draw one box per compartment first (A, B, C, D left to right, as in pour.columns):
+    cd sense && python live_view.py --cam <index> --new-boxes
 
     python transfer.py vial_A well_2                                  # plan only, print the six moves
     python transfer.py vial_A well_2 --cam 2 --run                    # camera pour to 90 % of full
@@ -39,7 +40,7 @@ HERE = FilePath(__file__).resolve().parent
 LAYOUT_FILE = HERE / "layout.yaml"
 sys.path.insert(0, str(HERE.parent / "software"))  # Om's pour (software/laminar/pour_motor6.py)
 sys.path.insert(0, str(HERE.parent / "sense"))     # camera + level tracker it uses
-DEFAULT_CALIB = HERE.parent / "sense" / "level_calib.json"
+DEFAULT_CAPACITY_ML = 4.5  # mL in a full compartment, unless layout.yaml pour.capacity_ml says otherwise
 ROLL_MARGIN_DEG = 2.0  # stay this far inside the wrist-roll limit
 
 
@@ -74,93 +75,136 @@ def pour_direction(cfg: dict, side: str | None = None) -> int:
     return 1 if int(cfg.get("direction", 1)) > 0 else -1
 
 
+def capacity_ml(layout: dict) -> float:
+    """mL in a full compartment (layout.yaml pour.capacity_ml)."""
+    return float((layout.get("pour") or {}).get("capacity_ml", DEFAULT_CAPACITY_ML))
+
+
 def camera_column(cfg: dict, compartment: str) -> str:
-    """The side-camera column (as named in the camera calibration) that shows this compartment."""
+    """The side-camera box (A, B, ... as drawn in live_view.py) that shows this compartment."""
     return str((cfg.get("columns") or {}).get(compartment, compartment))
 
 
 class CameraPour:
-    """Side camera + level tracker for pour_motor6, opened and checked BEFORE the arm moves."""
+    """Side camera + level model (sense/level_seg.onnx) for pour_motor6, opened and checked BEFORE the arm moves.
 
-    def __init__(self, cam: str, calib: str | FilePath, column: str):
+    No calibration file: the model reads the boxes drawn in `cd sense && python live_view.py --new-boxes`
+    (sense/live_boxes.json, named A, B, C, ... left to right, one per compartment); the columns around them
+    are watched for spills. Every pour is recorded to sense/seg_data/frames/pour_<date>_<time>/."""
+
+    def __init__(self, cam: str, column: str, capacity_ml: float, boxes: str | FilePath | None = None,
+                 seg_model: str | FilePath | None = None, record: bool = True):
         from laminar import pour_motor6 as P6
-        problems = P6.check_calibration(calib, column)
-        if problems:
-            raise RuntimeError("camera not calibrated: " + "; ".join(problems)
-                               + "  (run: cd software && python -m laminar.pour_motor6 calibrate)")
+        import live_view
         from cameras import LatestFrame, open_camera
-        from level import LevelTracker, load_columns
-        self.P6, self.calib, self.column = P6, str(calib), column
+        path = FilePath(boxes or live_view.BOXES_FILE)
+        if not path.exists():
+            raise RuntimeError(f"no boxes in {path.name}: cd sense && python live_view.py --cam {cam} --new-boxes, "
+                               "one box per compartment (A, B, C, ... left to right)")
+        drawn = json.loads(path.read_text())
+        names = [chr(ord("A") + i) for i in range(len(drawn))]
+        if column not in names:
+            raise RuntimeError(f"no box {column}: {path.name} has {', '.join(names) or 'none'}. Redraw with "
+                               "python live_view.py --new-boxes, one box per compartment")
+        model = FilePath(seg_model or live_view.DEFAULT_MODEL)
+        if not model.exists():
+            raise RuntimeError(f"{model.name} missing: train it (cd sense && python train_seg.py) or git pull")
+        self.P6, self.column, self.capacity_ml = P6, column, float(capacity_ml)
         self.cam = LatestFrame(open_camera(int(cam) if str(cam).isdigit() else cam)).start()
-        self.tracker = LevelTracker(self.cam, load_columns(self.calib))
-        frame, _ = self.cam.read()
-        end = time.time() + 3
-        while frame is None and time.time() < end:
-            time.sleep(0.05)
-            frame, _ = self.cam.read()
-        self.tracker.ref = P6._load_reference(self.calib, frame.shape if frame is not None else None)
-        if self.tracker.ref is None:
-            self.cam.stop()
-            raise RuntimeError(f"camera {cam}: no frames, or the empty reference image was taken with another "
-                               "camera / resolution. Wrong --cam, or recalibrate.")
-        self.tracker.start()
-        self.empty = json.loads(FilePath(self.calib).read_text()).get("empty", [])
+        self.tracker, self.names, _ = live_view.build(self.cam, drawn, str(model), self.capacity_ml,
+                                                      live_view.cam_width(self.cam))
+        time.sleep(1.5)
+        hz = P6.readings_per_s(self.tracker, column)
+        if hz < P6.MIN_READ_HZ:
+            self.close()
+            raise RuntimeError(f"only {hz} level readings a second (need {P6.MIN_READ_HZ}): the computer is too "
+                               "busy (training? other heavy apps?) or the camera is slow")
+        self.owns_camera = True
+        self.recorder = P6.CamRecorder(self.cam, tracker=self.tracker) if record else None
+        self._info: dict = {"column": column, "boxes": {k: list(c.roi) for k, c in self.tracker.columns.items()},
+                            "pours": []}
+
+    @classmethod
+    def shared(cls, cam, tracker, column: str, capacity_ml: float, record: bool = True) -> "CameraPour":
+        """A CameraPour on a camera + level tracker someone else already runs (e.g. the dashboard's bench
+        computer, which keeps them open for the live view). close() leaves them running."""
+        from laminar import pour_motor6 as P6
+        if column not in tracker.columns:
+            raise RuntimeError(f"no box {column} in the calibration: calibrate the side camera")
+        self = cls.__new__(cls)
+        self.P6, self.column, self.capacity_ml = P6, column, float(capacity_ml)
+        self.cam, self.tracker, self.names = cam, tracker, list(tracker.columns)
+        self.owns_camera = False
+        hz = P6.readings_per_s(tracker, column)
+        if hz < P6.MIN_READ_HZ:
+            raise RuntimeError(f"only {hz} level readings a second (need {P6.MIN_READ_HZ}): the computer is too busy")
+        self.recorder = P6.CamRecorder(cam, tracker=tracker) if record else None
+        self._info = {"column": column, "boxes": {k: list(c.roi) for k, c in tracker.columns.items()}, "pours": []}
+        return self
 
     def pour(self, direction: int, target: float, max_tilt: float, view: bool = True, on_tick=None):
-        """pour_right / pour_left through arm_server's tilt_stream. Returns pour_motor6.PourResult."""
+        """pour_right / pour_left through arm_server's tilt_stream, to `target` (fraction of full).
+        Returns pour_motor6.PourResult."""
         P6 = self.P6
         joint = P6.ServerTiltJoint(6)
-        win = P6.PourView(self.cam, self.tracker, self.column, self.empty) if view else None
+        win = P6.PourView(self.cam, self.tracker, self.column) if view else None
         fn = P6.pour_right if direction > 0 else P6.pour_left
 
         def tick(rec):
+            if self.recorder:
+                self.recorder.status = rec
             if win:
                 win(rec)
             if on_tick:
                 on_tick(rec)
         try:
-            return fn(joint, self.tracker, self.column, calib_path=self.calib,
-                      cfg=P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt), on_tick=tick)
-
+            # the columns around the target are watched for a RISE from their level now (spill from
+            # earlier pours is fine): empty=() means none of them has to read zero
+            r = fn(joint, self.tracker, self.column, calib_path=None, empty=(),
+                   cfg=P6.PourConfig(target_frac=target, max_tilt_deg=max_tilt), on_tick=tick)
+            self._info["pours"].append({k: v for k, v in r.__dict__.items() if k != "guide"})
+            return r
         finally:
             joint.close()       # ends the tilt_stream: arm_server rolls back to the base angle
             if win:
                 win.close()
 
-    def level(self, fresh_s: float = 1.0) -> tuple[float, float, float]:
-        """(fraction of full, mL, capacity mL) in the pour column now, from the percent calibration."""
-        calib = json.loads(FilePath(self.calib).read_text())
-        curve = (calib.get("fill_curve") or {}).get(self.column)
-        if not curve or len(curve) < 2 or not calib.get("capacity_ml"):
-            raise RuntimeError("camera calibration has no fill curve / capacity: recalibrate with --percent "
-                               "--capacity-ml <mL in a full channel>")
+    def level(self, fresh_s: float = 1.0, column: str | None = None) -> tuple[float, float, float]:
+        """(fraction of full, mL, capacity mL) in a column now (default: the pour column)."""
+        column = column or self.column
         end = time.time() + fresh_s
-        s = self.tracker.read(self.column)
+        s = self.tracker.read(column)
         while (time.time() - s.ts > 0.5 or s.conf < 0.5) and time.time() < end:
             time.sleep(0.05)
-            s = self.tracker.read(self.column)
+            s = self.tracker.read(column)
         if time.time() - s.ts > 0.5 or s.conf < 0.5:
-            raise RuntimeError(f"camera can't read column {self.column} (conf {s.conf:.2f}): vial, arm or hand in "
+            raise RuntimeError(f"camera can't read column {column} (conf {s.conf:.2f}): vial, arm or hand in "
                                "view, or too dark")
-        pxs, fracs = zip(*sorted(curve))
-        frac = float(np.clip(np.interp(s.px, pxs, fracs), 0.0, 1.0))
-        cap = float(calib["capacity_ml"])
-        return frac, frac * cap, cap
+        frac = float(np.clip(s.px / self.tracker.columns[column].roi[3], 0.0, 1.0))
+        return frac, frac * self.capacity_ml, self.capacity_ml
 
     def pour_ml(self, direction: int, add_ml: float, max_tilt: float, view: bool = True, on_tick=None):
         """Pour add_ml MORE into the column (whatever it already holds). Returns (PourResult, mL added or None).
         Refuses, without tilting, if that would overfill the channel."""
         frac0, ml0, cap = self.level()
         target = frac0 + add_ml / cap
-        if target > 1.0:
-            raise RuntimeError(f"channel {self.column} holds {ml0:.1f} of {cap:g} mL: +{add_ml:g} mL would overflow")
+        if target > 0.97:
+            raise RuntimeError(f"channel {self.column} holds {ml0:.1f} of {cap:g} mL: +{add_ml:g} mL would overflow "
+                               "(past 97 % of the rim)")
+        if target < 0.1:
+            raise RuntimeError(f"+{add_ml:g} mL into an empty channel is below what the pour can aim at "
+                               f"(10 % of the channel = {0.1 * cap:.2f} mL)")
         r = self.pour(direction, target, max_tilt, view=view, on_tick=on_tick)
         added = None if r.final_ml is None else round(r.final_ml - ml0, 3)
         return r, added
 
     def close(self) -> None:
-        self.tracker.stop()
-        self.cam.stop()
+        if getattr(self, "recorder", None):
+            self.recorder.stop(self._info)
+            self.recorder = None
+        if getattr(self, "owns_camera", True):
+            self.tracker.stop()
+            self.cam.stop()
 
 
 def pour_fixed(client: ArmClient, cfg: dict, direction: int, tilt_deg: float, hold_s: float) -> str:
@@ -186,11 +230,12 @@ def main() -> None:
     ap.add_argument("--side", choices=["right", "left"], default=None,
                     help="roll direction (default: layout.yaml pour.direction, +1 = right)")
     ap.add_argument("--cam", default="0", help="camera pour: side camera index or path")
-    ap.add_argument("--calib", default=str(DEFAULT_CALIB), help="camera pour: camera calibration file")
+    ap.add_argument("--boxes", default=None, help="camera pour: boxes file (default sense/live_boxes.json)")
     ap.add_argument("--target", type=float, default=0.9, help="camera pour: fill target, fraction of full")
     ap.add_argument("--add-ml", type=float, default=None,
                     help="camera pour: pour this many mL MORE (whatever the channel holds) instead of --target")
-    ap.add_argument("--max-tilt", type=float, default=85.0, help="camera pour: max roll from upright, deg")
+    ap.add_argument("--max-tilt", type=float, default=None,
+                    help="camera pour: max roll from upright, deg (default layout.yaml pour.max_tilt_deg, 85)")
     ap.add_argument("--no-view", action="store_true", help="camera pour: no live camera window")
     ap.add_argument("--tilt", type=float, default=80.0, help="fixed pour: roll angle, degrees")
     ap.add_argument("--hold", type=float, default=3.0, help="fixed pour: seconds at full tilt")
@@ -205,6 +250,7 @@ def main() -> None:
     lift_mm, lower_mm = float(layout.get("lift_mm", 150)), float(layout.get("lower_mm", 110))
     direction = pour_direction(cfg, a.side)
     column = camera_column(cfg, a.compartment)
+    max_tilt = a.max_tilt if a.max_tilt is not None else float(cfg.get("max_tilt_deg", 85.0))
 
     client = ArmClient(dry_run=not a.run)
     try:
@@ -236,7 +282,8 @@ def main() -> None:
     camera = None
     if a.pour == "camera":
         try:
-            camera = CameraPour(a.cam, a.calib, column)   # checked now, so a bad camera never strands the tube
+            camera = CameraPour(a.cam, column, capacity_ml(layout), boxes=a.boxes)   # checked now, so a bad
+            # camera never strands the tube
         except (RuntimeError, ImportError) as e:
             sys.exit(f"NOT MOVING: {e}")
     ok = True
@@ -245,10 +292,10 @@ def main() -> None:
             client.run(p)
         if camera:
             if a.add_ml is not None:
-                r, added = camera.pour_ml(direction, a.add_ml, a.max_tilt, view=not a.no_view)
+                r, added = camera.pour_ml(direction, a.add_ml, max_tilt, view=not a.no_view)
                 print(f"added {added} mL (asked {a.add_ml:g})")
             else:
-                r = camera.pour(direction, a.target, a.max_tilt, view=not a.no_view)
+                r = camera.pour(direction, a.target, max_tilt, view=not a.no_view)
             ok = r.ok
             fill = f"{r.final_fill:.0%} of target" if r.final_fill is not None else "fill unknown"
             print(f"pour {r.result}: {r.reason} ({fill})")

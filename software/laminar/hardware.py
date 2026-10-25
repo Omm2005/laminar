@@ -1,4 +1,5 @@
-"""One switch between fake and real hardware. LAMINAR_FAKE=0 selects the real arm once it exists."""
+"""One switch between fake and real hardware. LAMINAR_FAKE=0 selects the real arm (robotics/arm_server.py +
+the side camera); LAMINAR_CAM picks the side camera (default 0)."""
 from __future__ import annotations
 
 import os
@@ -13,9 +14,15 @@ from .skills import FakeSkills, Skills
 @dataclass
 class System:
     arm: Arm
-    level: LevelTracker
+    level: LevelTracker | None      # the fakes' tube; the real skills read the side camera themselves
     skills: Skills
     bench: dict
+
+    def close(self) -> None:
+        """Release the camera (real hardware). Safe to call more than once."""
+        close = getattr(self.skills, "close", None)
+        if close:
+            close()
 
 
 def make_system(fake: bool | None = None, time_scale: float = 1.0, faults=(), bench_path=None, seed: int = 0) -> System:
@@ -23,7 +30,9 @@ def make_system(fake: bool | None = None, time_scale: float = 1.0, faults=(), be
         fake = os.environ.get("LAMINAR_FAKE", "1") != "0"
     bench = load_bench(bench_path)
     if not fake:
-        raise NotImplementedError("real hardware not wired yet: needs robotics/arm.py and sense/level.py")
+        from .real_skills import RealArm, RealSkills
+        skills = RealSkills(cam=os.environ.get("LAMINAR_CAM", "0"))
+        return System(RealArm(skills.client), None, skills, bench)
     arm = FakeArm(q0=pose(bench, "home"), time_scale=time_scale, workspace_m=workspace_m(bench))
     level = FakeLevelTracker(seed=seed)
     level.start(curve=bench["level_curve"][bench["station"]["tube_type"]])

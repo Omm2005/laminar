@@ -51,10 +51,10 @@ def level_from_probs(probs: np.ndarray) -> tuple[float, float]:
 class SegLevel:
     def __init__(self, model_path: str | Path = DEFAULT_MODEL):
         import onnxruntime as ort
-        # two threads that sleep when idle (the default spins on every core): spare cores must stay
+        # three threads that sleep when idle (the default spins on every core): spare cores must stay
         # free for arm_server's motor feedback (all cores busy -> "lost feedback from J1")
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads, opts.inter_op_num_threads = 2, 1
+        opts.intra_op_num_threads, opts.inter_op_num_threads = 3, 1
         opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self.sess = ort.InferenceSession(str(model_path), opts, providers=["CPUExecutionProvider"])
         self.inp = self.sess.get_inputs()[0].name
@@ -81,9 +81,12 @@ class SegLevel:
 class SegLevelTracker(LevelTracker):
     """LevelTracker that measures with the tiny model instead of the empty reference image."""
 
+    MAX_HZ = 20.0       # readings a second: the pour needs >= 15; more only costs CPU arm_server needs
+
     def __init__(self, cam, columns, model_path: str | Path = DEFAULT_MODEL, history_s: float = 2.0):
         super().__init__(cam, columns, history_s)
         self.seg = SegLevel(model_path)
+        self._next = 0.0
 
     def zero(self, n: int = 15):
         pass                                   # nothing to capture: the model needs no reference
@@ -95,10 +98,10 @@ class SegLevelTracker(LevelTracker):
     def _loop(self):
         while self._running:
             frame, ts = self.cam.read()
-            if frame is None or ts == self._last_ts:
-                time.sleep(0.002)
+            if frame is None or ts == self._last_ts or time.time() < self._next:
+                time.sleep(0.003)
                 continue
-            self._last_ts = ts
+            self._last_ts, self._next = ts, time.time() + 1.0 / self.MAX_HZ
             crops = {name: col.crop(frame) for name, col in self.columns.items()}
             for (name, crop), (px, conf) in zip(crops.items(), self.seg.measure_many(list(crops.values()))):
                 col = self.columns[name]

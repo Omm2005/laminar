@@ -17,10 +17,11 @@ import time
 import cv2
 
 
-def open_camera(src: int | str, width: int = 640, height: int = 480, fps: int = 30,
+def open_camera(src: int | str, width: int = 1280, height: int = 720, fps: int = 30,
                 mjpg: bool = True, exposure: float | None = None,
                 wb_kelvin: int | None = None) -> cv2.VideoCapture:
-    """Open a camera and lock its settings. Prints what the camera actually accepted."""
+    """Open a camera and lock its settings. Prints what the camera actually accepted.
+    Default 1280x720: the side camera's full ultrawide view (at 640x480 it crops the middle of its sensor)."""
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open camera {src!r}")

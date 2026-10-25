@@ -31,7 +31,7 @@ from .hardware import System
 from .skills import SkillResult, Skills
 
 RUNS_DIR = telemetry.REPO_ROOT / "logs" / "runs"
-STEP_SKILLS = ("pick", "carry", "pour", "verify", "place")
+STEP_SKILLS = ("pick", "carry", "pour", "verify", "place", "lift", "lower")
 SAFE_POSE = "home"  # where the arm holds a vial upright after an abort
 
 
@@ -198,10 +198,10 @@ class Executor:
             return f"bad args for {skill}: missing {missing}, unexpected {extra}"
         if skill == "pick" and self.holding:
             return f"already holding {self.holding}"
-        if skill == "carry" and a["to"] == "station" and not self.holding:
-            return "nothing held to carry to the station"
-        if skill == "pour" and (not self.holding or self.at != "station"):
-            return "must hold a vial at the station before pouring"
+        if skill == "carry" and a["to"] not in ("rack", "home") and not self.holding:
+            return f"nothing held to carry to {a['to']}"
+        if skill == "pour" and (not self.holding or self.at not in ("station", a["target"])):
+            return f"must hold a vial at {a['target']} (or the station) before pouring"
         if skill == "place" and self.holding != a["vial_id"]:
             return f"not holding {a['vial_id']} (holding {self.holding})"
         return ""
@@ -220,6 +220,8 @@ class Executor:
             self.at = step.args["to"]
         elif step.skill == "place":
             self.holding, self.at = None, "rack"
+        elif step.skill in ("lift", "lower"):
+            self.at = "moved"
 
     # ------------------------------------------------------------ abort
 
@@ -231,8 +233,11 @@ class Executor:
             s.status = "skipped"
         estop = bool(step.telemetry.get("estop")) or getattr(self.system.arm, "stopped", False)
         safe = False
+        safe_stop = getattr(self.system.skills, "safe_stop", None)   # real arm: hold where it is
         if estop:
             reason_safe = "arm is e-stopped; not moving. A human must check the bench and reset."
+        elif safe_stop:
+            safe, reason_safe = safe_stop()
         else:
             try:
                 self.system.arm.move_q(pose(self.system.bench, SAFE_POSE), 2.0)

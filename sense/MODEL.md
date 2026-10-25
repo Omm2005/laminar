@@ -88,6 +88,10 @@ What the arm does from the camera:
 
 Motion only, no liquid: `pour right --sim --real-motor` (real wrist, simulated liquid).
 
+The same camera pour (boxes + model, no calibration) is used by `robotics/transfer.py`, the voice `arm` mode
+and the lab agent's real skills (`python -m laminar.chat --real`, see software/README.md). For those, draw one
+box per compartment (A, B, C, D left to right, matching `pour.columns` in robotics/layout.yaml).
+
 Every pour is recorded to `sense/seg_data/frames/pour_<date>_<time>/`:
 `review.mp4` (annotated video), `frame_*.jpg` + `times.csv` (raw frames), `pour.json` (boxes, result,
 tilt / fill / rate / action at every step). `--review-cam 1` films a second camera next to it; `--no-record` turns it off.

@@ -70,7 +70,7 @@ Things to say:
 - `arm_server.py` running, with the arm already holding the vial (the grab is a recorded step).
 - The routes measured in `layout.yaml`.
 - The `vials:` list in `layout.yaml`, saying which liquid each vial holds.
-- A side-camera calibration from `python -m laminar.pour_motor6 calibrate`.
+- One box per compartment on the side camera: `cd sense && python live_view.py --cam 0 --new-boxes` (A, B, C, D left to right). No calibration: the level model reads the boxes.
 
 On "stop" it tilts the vial upright and **holds where it is**; a move already running finishes first.
 

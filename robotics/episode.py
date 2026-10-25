@@ -6,6 +6,8 @@
        (each reads the follower's commanded joints from the newest row of the live data.csv)
     3. stop teleop (q, or create robotics/STOP), start arm_server.py
     4. python episode.py plan                          # prints the moves, saves 2-D coordinates
+       python episode.py save-route vial_A well_1      # A = vial_A's grab, B = over well_1: write the (dx, dy)
+                                                       # into layout.yaml routes (what transfer.py and the agent use)
        python episode.py replay --run                  # moves the arm
 
 Replay = the recorded rest -> A segment of the episode, gripper included (leading idle frames skipped,
@@ -115,10 +117,33 @@ def reverse_path(p: M.Path) -> M.Path:
                   max_ang_err_deg=p.max_ang_err_deg)
 
 
+def save_route(vial: str, compartment: str, dxy, dz: float, path: FilePath = HERE / "layout.yaml") -> None:
+    """Write routes.<vial>.<compartment> = [dx, dy] into layout.yaml, editing only that entry (comments stay)."""
+    import re
+    import yaml
+    text = path.read_text()
+    lay = yaml.safe_load(text) or {}
+    if compartment not in (lay.get("routes", {}).get(vial) or {}):
+        sys.exit(f"layout.yaml has no routes.{vial}.{compartment}: known vials {', '.join(lay.get('routes', {}))}")
+    line = re.compile(rf"^(\s+{re.escape(vial)}:\s*\{{.*?\b{re.escape(compartment)}:\s*)(null|\[[^\]]*\])", re.M)
+    new, n = line.subn(lambda m: f"{m.group(1)}[{dxy[0]:.1f}, {dxy[1]:.1f}]", text, count=1)
+    if n != 1:
+        sys.exit(f"could not find routes.{vial}.{compartment} on one line in layout.yaml: edit it by hand to "
+                 f"[{dxy[0]:.1f}, {dxy[1]:.1f}]")
+    path.write_text(new)
+    check = yaml.safe_load(new)["routes"][vial][compartment]
+    print(f"layout.yaml: routes.{vial}.{compartment} = {check} mm")
+    want = float(lay.get("lift_mm", 100)) - float(lay.get("lower_mm", 60))
+    if abs(dz - want) > 10:
+        print(f"  note: B is {dz:+.0f} mm above A, but the carry ends {want:+.0f} mm above the grab "
+              f"(lift_mm - lower_mm in layout.yaml): the vial will hang {dz - want:+.0f} mm off from where you taught")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["mark", "plan", "replay"])
-    ap.add_argument("name", nargs="?", choices=["A", "B"], help="mark: which pose")
+    ap.add_argument("command", choices=["mark", "plan", "replay", "save-route"])
+    ap.add_argument("name", nargs="?", help="mark: A or B; save-route: the vial (e.g. vial_A)")
+    ap.add_argument("compartment", nargs="?", help="save-route: the compartment B is over (e.g. well_1)")
     ap.add_argument("--rec", default=None, help="recording folder (default: newest in recordings/)")
     ap.add_argument("--run", action="store_true", help="replay: move the arm (otherwise print only)")
     ap.add_argument("--no-return", action="store_true",
@@ -127,7 +152,7 @@ def main() -> None:
     rec = FilePath(a.rec) if a.rec else latest_recording()
 
     if a.command == "mark":
-        if not a.name:
+        if a.name not in ("A", "B"):
             ap.error("mark needs A or B")
         mark(rec, a.name)
         return
@@ -149,6 +174,11 @@ def main() -> None:
     print(f"  replay rest -> A: {len(seg)} recorded frames at {hz:.1f} Hz ({(len(seg) - 1) / hz:.1f} s)")
     for p in moves:
         print("  " + p.summary())
+    if a.command == "save-route":
+        if not a.name or not a.compartment:
+            ap.error("save-route needs the vial and the compartment, e.g. save-route vial_A well_1")
+        save_route(a.name, a.compartment, ep["travel"]["dxy_mm"], ep["travel"]["dz_mm"])
+        return
     if a.command == "plan" or not a.run:
         print("Plan only. Use: python episode.py replay --run")
         return

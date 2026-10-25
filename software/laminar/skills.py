@@ -72,6 +72,14 @@ class Skills(ABC):
     @abstractmethod
     def place(self, vial_id: str, slot: str) -> SkillResult: ...
 
+    def lift(self, mm: float) -> SkillResult:
+        """Straight up by mm, the vial kept as upright as it is."""
+        return SkillResult(False, "lift is not available on this robot")
+
+    def lower(self, mm: float) -> SkillResult:
+        """Straight down by mm."""
+        return SkillResult(False, "lower is not available on this robot")
+
 
 # ---------------------------------------------------------------- fakes
 
@@ -298,3 +306,16 @@ class FakeSkills(Skills):
         self.arm.move_q(pre, 1.0)
         w.at = "rack"
         return SkillResult(True, "", {"slot": slot})
+
+
+def _fake_straight(self, mm, up):
+    if not 1 <= float(mm) <= 150:
+        return SkillResult(False, f"{mm} mm: move between 1 and 150 mm")
+    self.world.at = "moved"
+    return SkillResult(True, "", {"moved_mm": float(mm) if up else -float(mm), "simulated": True})
+
+
+FakeSkills.lift = logged(lambda self, mm: _fake_straight(self, mm, True))
+FakeSkills.lift.__name__ = "lift"
+FakeSkills.lower = logged(lambda self, mm: _fake_straight(self, mm, False))
+FakeSkills.lower.__name__ = "lower"

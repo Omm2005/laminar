@@ -18,7 +18,8 @@ Three backends, same voice on top (pick with --backend):
          Needs, in the repo:
            - robotics/transfer.py: CameraPour.pour() / pour_ml() take an on_tick callback
            - robotics/layout.yaml: `vials:` says which liquid each vial holds; routes measured
-           - sense/level_calib.json from `python -m laminar.pour_motor6 calibrate` (capacity_ml)
+           - sense/live_boxes.json: one box per compartment, drawn with `cd sense && python live_view.py
+             --new-boxes` (A, B, C, D left to right); the level model reads them, no calibration
            - arm_server.py running, and the arm already holding the vial (the grab is a recorded
              step, not part of transfer.py)
          --dry-run plans and prints the moves without moving the arm or opening the camera.
@@ -338,14 +339,14 @@ def _strip_spoken(plan: dict) -> dict:
 class ArmBackend(Backend):
     """robotics/transfer.py's moves + camera pour, driven by voice. One pour per plan."""
 
-    def __init__(self, repo: Path, cam: str = "0", calib: str | None = None, dry_run: bool = False,
+    def __init__(self, repo: Path, cam: str = "0", boxes: str | None = None, dry_run: bool = False,
                  max_tilt: float = 85.0, view: bool = False):
         super().__init__()
         for sub in ("sense", "software", "robotics"):
             sys.path.insert(0, str(repo / sub))
         import transfer as T
         self.T, self.repo, self.cam, self.dry_run = T, repo, cam, dry_run
-        self.calib = str(calib or T.DEFAULT_CALIB)
+        self.boxes = boxes                                   # None = sense/live_boxes.json
         self.max_tilt, self.view = max_tilt, view
         self.layout = T.load_layout()
         self.cfg = self.layout.get("pour") or {}
@@ -397,16 +398,11 @@ class ArmBackend(Backend):
                 errs.append(f"the arm can't go there yet: {e}")
             cap = self._capacity_ml()
             if not 0 < a["ml"] <= (cap or 0):
-                errs.append(f"{a['ml']:g} millilitres is more than one channel holds ({cap:g})" if cap
-                            else "the camera calibration has no capacity_ml: recalibrate with "
-                                 "pour_motor6 calibrate")
+                errs.append(f"{a['ml']:g} millilitres is more than one channel holds ({cap:g})")
         return errs
 
     def _capacity_ml(self) -> float | None:
-        try:
-            return float(json.loads(Path(self.calib).read_text())["capacity_ml"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+        return self.T.capacity_ml(self.layout)
 
     # ---- running (same order and checks as transfer.main)
 
@@ -429,7 +425,8 @@ class ArmBackend(Backend):
         for p in out + back:
             print("  " + p.summary())
 
-        camera = None if self.dry_run else T.CameraPour(self.cam, self.calib, col)  # checked before moving
+        camera = None if self.dry_run else T.CameraPour(self.cam, col, T.capacity_ml(self.layout),
+                                                         boxes=self.boxes)  # checked before moving
         label = f"Column {col}"
         try:
             emit("step_start", {"skill": "carry", "to": "station"})
@@ -534,7 +531,7 @@ def main():
     ap.add_argument("--repo", default=None, help="laminar checkout (default: found automatically)")
     ap.add_argument("--claude", action="store_true", help="om: read requests with Claude")
     ap.add_argument("--cam", default="0", help="arm: side camera index")
-    ap.add_argument("--calib", default=None, help="arm: camera calibration (default sense/level_calib.json)")
+    ap.add_argument("--boxes", default=None, help="arm: side-camera boxes (default sense/live_boxes.json)")
     ap.add_argument("--max-tilt", type=float, default=85.0, help="arm: max wrist roll, degrees")
     ap.add_argument("--view", action="store_true", help="arm: show the camera window during the pour")
     ap.add_argument("--dry-run", action="store_true", help="arm: plan and print, don't move or pour")
@@ -548,7 +545,7 @@ def main():
         if repo is None:
             sys.exit("Can't find the laminar repo: pass --repo /path/to/laminar")
         backend = (OmBackend(repo, claude=a.claude) if a.backend == "om" else
-                   ArmBackend(repo, a.cam, a.calib, dry_run=a.dry_run, max_tilt=a.max_tilt, view=a.view))
+                   ArmBackend(repo, a.cam, a.boxes, dry_run=a.dry_run, max_tilt=a.max_tilt, view=a.view))
     loop, bus = build(a.mock, a.wake, backend)
     example = {"fake": "Pour two milliliters of blue into column A",
                "om": "Pour 2 ml of blue into the tube",

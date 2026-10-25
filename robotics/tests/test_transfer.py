@@ -99,9 +99,22 @@ def test_pour_direction_and_camera_column():
     assert T.camera_column(lay["pour"], "well_1") == "A"
 
 
-def test_camera_pour_refuses_before_opening_the_camera_when_not_calibrated(tmp_path):
-    with pytest.raises(RuntimeError, match="not calibrated"):
-        T.CameraPour("0", tmp_path / "missing.json", "A")
+def test_camera_pour_refuses_before_opening_the_camera_without_boxes(tmp_path):
+    with pytest.raises(RuntimeError, match="no boxes"):
+        T.CameraPour("0", "A", 4.5, boxes=tmp_path / "missing.json")
+
+
+def test_camera_pour_refuses_a_column_with_no_box(tmp_path):
+    boxes = tmp_path / "boxes.json"
+    boxes.write_text("[[10, 10, 30, 100], [60, 10, 30, 100]]")      # A and B only
+    with pytest.raises(RuntimeError, match="no box C"):
+        T.CameraPour("0", "C", 4.5, boxes=boxes)
+
+
+def test_capacity_comes_from_layout():
+    assert T.capacity_ml({"pour": {"capacity_ml": 3.0}}) == 3.0
+    assert T.capacity_ml({}) == T.DEFAULT_CAPACITY_ML
+    assert T.capacity_ml(T.load_layout()) > 0
 
 
 def test_pour_motor6_runs_on_the_tilt_stream_and_ends_upright(monkeypatch):
@@ -136,14 +149,14 @@ def test_pour_motor6_runs_on_the_tilt_stream_and_ends_upright(monkeypatch):
 
 
 def _camera_pour(tmp_path, px, conf=1.0):
-    """A CameraPour without a camera: fake percent calibration (4 mL full, 200 px box) + a stub tracker."""
+    """A CameraPour without a camera: a 200 px box that holds 4 mL full + a stub tracker."""
     import types
     from laminar import pour_motor6 as P6
-    from level import LevelSample
+    from level import Column, LevelSample
     cp = T.CameraPour.__new__(T.CameraPour)
-    cp.P6, cp.column, cp.empty = P6, "A", []
-    cp.calib = str(P6.fake_calibrate(tmp_path / "calib.json"))
-    cp.tracker = types.SimpleNamespace(read=lambda name: LevelSample(px * 0.02, px, conf, time.time()))
+    cp.P6, cp.column, cp.capacity_ml = P6, "A", 4.0
+    cp.tracker = types.SimpleNamespace(read=lambda name: LevelSample(px * 0.02, px, conf, time.time()),
+                                       columns={"A": Column("A", (0, 0, 30, 200))})
     cp.asked = []
 
     def fake_pour(direction, target, max_tilt, view=True, on_tick=None):

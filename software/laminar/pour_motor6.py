@@ -802,6 +802,14 @@ class CamRecorder:
         print(f"camera recorded: {self.n} frames in {self.dir.relative_to(REPO_ROOT)}")
 
 
+def readings_per_s(tracker, column: str) -> int:
+    """Level readings of `column` in the last second. The fill rate needs >= 4 readings in 0.3 s; with
+    fewer than MIN_READ_HZ the pour sees no flow and keeps tilting."""
+    with tracker._lock:
+        ts = [smp.ts for smp in tracker._hist[column]]
+    return sum(1 for t in ts if t > ts[-1] - 1.0) if ts else 0
+
+
 def ask_yes(question: str) -> bool:
     """y/n question that ignores keys typed earlier (e.g. ENTER pressed in the Terminal while drawing
     boxes) and asks again on an empty answer."""
@@ -956,10 +964,7 @@ def main() -> int:
             cam.stop()
             return 1
         time.sleep(1.5)
-        # the fill rate needs >= 4 readings in 0.3 s; fewer and the pour sees no flow and keeps tilting
-        with tracker._lock:
-            ts = [smp.ts for smp in tracker._hist[col]]
-        hz = sum(1 for t in ts if ts and t > ts[-1] - 1.0)
+        hz = readings_per_s(tracker, col)
         print(f"camera readings: {hz}/s for {len(names)} boxes")
         if hz < MIN_READ_HZ:
             print(f"NOT STARTED: only {hz} level readings a second (need {MIN_READ_HZ}). The computer is too busy: "
