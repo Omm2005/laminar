@@ -58,7 +58,7 @@ def fake_episode(tmp_path, monkeypatch, summary, rc=0):
     monkeypatch.setattr(B.subprocess, "Popen", lambda *a, **k: Proc())
 
 
-ARGS = SimpleNamespace(yes=True, side_cam=2, wrist_cam=1, episode_args=[])
+ARGS = SimpleNamespace(ask=False, side_cam=2, wrist_cam=1, episode_args=[])
 
 
 def test_a_good_run_reports_running_steps_pours_and_done(tmp_path, monkeypatch):
@@ -84,8 +84,14 @@ def test_a_stopped_episode_reports_aborted_with_the_reason(tmp_path, monkeypatch
     assert site.updates[-1] == {"status": "aborted", "reason": "B2b: no flow at max tilt"}
 
 
-def test_skipped_at_the_bench(monkeypatch):
+def test_runs_start_without_asking_by_default(tmp_path, monkeypatch):
+    fake_episode(tmp_path, monkeypatch, {"jobs": [], "error": None})
+    monkeypatch.setattr("builtins.input", lambda *_: pytest.fail("asked at the bench without --ask"))
+    B.run_one(FakeSite(), RUN, ARGS)
+
+
+def test_skipped_at_the_bench_with_ask(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_: "s")
     site = FakeSite()
-    B.run_one(site, RUN, SimpleNamespace(yes=False, side_cam=2, wrist_cam=1, episode_args=[]))
+    B.run_one(site, RUN, SimpleNamespace(ask=True, side_cam=2, wrist_cam=1, episode_args=[]))
     assert site.updates == [{"status": "aborted", "reason": "skipped at the bench"}]

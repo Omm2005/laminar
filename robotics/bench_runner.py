@@ -9,8 +9,8 @@ The dashboard's Run tab, Run log & QC, Audit and the assistant all show it like 
     terminal 2:  python publish.py                              (cameras + joints to the website, optional)
     terminal 3:  python bench_runner.py                         (this: waits for approved runs)
 
-Before each run it prints the pours and waits for Enter here (s = skip it), so the person at the arm starts it.
---yes starts approved runs without asking (only with someone at the e-stop).
+Approved runs start on their own: the approval is the named person on the dashboard. Keep someone at the e-stop.
+--ask: print the pours and wait for Enter here before each run (s = skip it).
 
 Pours: tube B, 1 mL into well 2 -> job "B2b:+N" (add N % of a full column; full = 95 % of the 4.5 mL box, see
 pour_episode.TARGET_CAP / CAPACITY_ML). A tube poured into several wells is grabbed once per well. The poured mL
@@ -95,7 +95,7 @@ def run_one(site: Site, run: dict, a) -> None:
         return
     print(f"\n=== approved run {rid[-6:]}: " + ", ".join(f"tube {j['tube']} {j['ml']:g} mL into container "
                                                           f"{'abcd'[j['well'] - 1]} (well {j['well']})" for j in jobs))
-    if not a.yes:
+    if a.ask:
         ans = input("  Start it on the arm? Enter = start, s = skip: ").strip().lower()
         if ans.startswith("s"):
             site.update(rid, status="aborted", reason="skipped at the bench")
@@ -152,7 +152,7 @@ def run_one(site: Site, run: dict, a) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--site", default=SITE, help="the website's backend (https://<name>.convex.site)")
-    ap.add_argument("--yes", action="store_true", help="start approved runs without asking here")
+    ap.add_argument("--ask", action="store_true", help="wait for Enter here before each approved run (s = skip)")
     ap.add_argument("--side-cam", type=int, default=2)
     ap.add_argument("--wrist-cam", type=int, default=1)
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between checks for an approved run")

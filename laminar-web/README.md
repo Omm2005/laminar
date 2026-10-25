@@ -31,7 +31,8 @@ Set these on the Convex deployment (`npx convex env set NAME value`), never in t
 
 **Runs go to the real arm.** Every approved run waits at `/bench/next` (`EXECUTOR = "bench"` in `convex/runs.ts`; set
 it to `"sim"` for the simulated bench). On the bench laptop, `python robotics/bench_runner.py` takes it, runs each pour
-with `pour_episode.py`, and reports the measured mL back. It asks for Enter at the bench before each run.
+with `pour_episode.py`, and reports the measured mL back. Approved runs start on their own (`--ask` to confirm each
+one at the bench); keep someone at the e-stop.
 
 | Feature | Where |
 | --- | --- |
