@@ -149,7 +149,7 @@ export default function Chat({ name }: { name: string }) {
             </div>
           ) : bench ? (
             <div className="stack" style={{ gap: 8 }}>
-              <p className="mono" style={{ fontSize: 12.5, color: "var(--ink-3)", letterSpacing: ".08em" }}>Idle · {bench.tubes.length} tubes · {bench.wells.length} wells</p>
+              <p className="mono" style={{ fontSize: 12.5, color: "var(--ink-3)" }}>Idle · {bench.tubes.length} tubes · {bench.wells.length} wells</p>
               <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
                 {bench.tubes.map((t) => (
                   <li key={t._id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5 }}>

@@ -3,145 +3,267 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { fmtSigned } from "./ui";
 
-type Round = { target: number; onset: number; maxFlow: number };
-const newRound = (): Round => ({
-  target: Math.round((1 + Math.random() * 3) * 10) / 10,
-  onset: 22 + Math.random() * 14,
-  maxFlow: 1.35 + Math.random() * 0.3,
-});
-const MAX_TILT = 80, TILT_RATE = 55, FLIGHT_S = 0.3;
+/* ───────────────── physics constants ───────────────── */
+const VIAL_FULL = 5;              // mL, generous so a 1-4 mL target is always reachable
+const OMEGA = 5;                  // critically damped spring on tilt
+const SUBSTEP_MAX = 0.45 / OMEGA; // ω·h < 0.45
+const HELD_TARGET = 72;
+const Q_PEAK = 1.6, Q_REF_OVER = 20; // q = 1.6 mL/s at θ0+20° with full vial
+const K = Q_PEAK / Math.pow(Q_REF_OVER, 1.5); // closed-form k
+const Q_CAP = 3.0;
+const FLIGHT_TAU = 0.28;          // s, time of flight from lip to beaker
+const TRICKLE_TAU = 0.18;         // s, flow decay once θ < θ0 after release
+const END_HOLD = 0.7;             // s of quiescence before scoring
 
-/** Hold to tilt, release to tip back. Liquid in the air keeps landing for 0.3 s. */
+const newRound = () => ({
+  target: Math.round((1 + Math.random() * 3) * 10) / 10, // 1.0..4.0 mL
+  theta0: 26 + Math.random() * 18,                        // hidden onset
+});
+
+type Round = ReturnType<typeof newRound>;
+
+type S = {
+  theta: number;
+  v: number;
+  q: number;
+  remaining: number;
+  received: number;
+  flight: { landAt: number; v: number }[];
+  wobble: number;      // 0..1 envelope
+  held: boolean;
+  started: boolean;
+  settledAt: number;   // ms the quiescence window began, 0 if active
+  last: number;        // ms of previous frame
+  wasAbove: boolean;   // whether θ was above θ0 recently
+};
+
+const freshS = (): S => ({
+  theta: 0, v: 0, q: 0,
+  remaining: VIAL_FULL, received: 0,
+  flight: [], wobble: 0,
+  held: false, started: false, settledAt: 0, last: 0, wasAbove: false,
+});
+
 export default function Game({ name }: { name: string }) {
   const board = useQuery(api.qc.leaderboard);
   const save = useMutation(api.qc.submitScore);
   const [round, setRound] = useState<Round>(newRound);
-  const [view, setView] = useState({ tilt: 0, ml: 0, air: 0 });
+  const [view, setView] = useState({ theta: 0, poured: 0, surfaceWobble: 0, q: 0, remaining: VIAL_FULL });
   const [result, setResult] = useState<{ ml: number; err: number } | null>(null);
   const [saveErr, setSaveErr] = useState("");
-  const st = useRef({ tilt: 0, ml: 0, flight: [] as { t: number; v: number }[], holding: false, started: false, last: 0, settledAt: 0 });
+  const st = useRef<S>(freshS());
   const raf = useRef(0);
+  const paused = useRef(false);
 
   const loop = useCallback((now: number) => {
     const s = st.current;
-    const dt = Math.min(0.05, (now - s.last) / 1000);
+    if (paused.current || document.hidden) { s.last = now; raf.current = requestAnimationFrame(loop); return; }
+    const rawDt = s.last ? Math.min(0.05, (now - s.last) / 1000) : 0;
     s.last = now;
-    s.tilt = Math.max(0, Math.min(MAX_TILT, s.tilt + (s.holding ? TILT_RATE : -TILT_RATE * 1.6) * dt));
-    const over = Math.max(0, s.tilt - round.onset) / (MAX_TILT - round.onset);
-    const flow = round.maxFlow * Math.pow(over, 1.3);
-    if (flow > 0) s.flight.push({ t: now / 1000 + FLIGHT_S, v: flow * dt });
+
+    // ─── spring on tilt ───
+    const target = s.held ? HELD_TARGET : 0;
+    const substeps = Math.max(1, Math.ceil(rawDt / SUBSTEP_MAX));
+    const h = rawDt / substeps;
+    for (let k = 0; k < substeps; k++) {
+      s.v += (OMEGA * OMEGA * (target - s.theta) - 2 * OMEGA * s.v) * h;
+      s.theta += s.v * h;
+    }
+
+    // ─── flow ───
+    const above = s.theta >= round.theta0;
+    let q = 0;
+    if (above && s.remaining > 1e-5) {
+      const over = s.theta - round.theta0;
+      q = Math.min(Q_CAP, K * Math.pow(over, 1.5) * Math.sqrt(Math.max(0, s.remaining) / VIAL_FULL));
+      s.wasAbove = true;
+    } else if (s.wasAbove && s.q > 1e-5 && rawDt > 0) {
+      q = s.q * Math.exp(-rawDt / TRICKLE_TAU);
+      if (q < 1e-5) { q = 0; s.wasAbove = false; }
+    }
+    s.q = q;
+
+    // ─── emit + flight ───
+    if (q > 0 && rawDt > 0) {
+      const emitted = Math.min(s.remaining, q * rawDt);
+      s.remaining -= emitted;
+      s.flight.push({ landAt: now / 1000 + FLIGHT_TAU, v: emitted });
+    }
+    const nowS = now / 1000;
     let landed = 0;
-    s.flight = s.flight.filter((p) => (p.t <= now / 1000 ? ((landed += p.v), false) : true));
-    s.ml += landed;
-    const air = s.flight.reduce((a, p) => a + p.v, 0);
-    setView({ tilt: s.tilt, ml: s.ml, air });
-    if (s.started && !s.holding && s.tilt === 0 && air === 0) {
+    s.flight = s.flight.filter((p) => (p.landAt <= nowS ? (landed += p.v, false) : true));
+    s.received += landed;
+
+    // ─── wobble envelope: rise while pouring, decay after ───
+    const targetWobble = q > 0 ? 1 : 0;
+    const wTau = q > 0 ? 0.2 : 0.5;
+    s.wobble += (targetWobble - s.wobble) * (1 - Math.exp(-rawDt / wTau));
+    const surfaceWobble = s.wobble * 2 * Math.sin(2 * Math.PI * 3.2 * nowS);
+
+    // ─── end-of-round latch ───
+    if (s.started && !s.held && s.q < 0.005 && s.theta < 2 && s.flight.length === 0) {
       if (!s.settledAt) s.settledAt = now;
-      if (now - s.settledAt > 150) {
-        const ml = Math.round(s.ml * 100) / 100;
+      if (now - s.settledAt > END_HOLD * 1000) {
+        const ml = Math.round(s.received * 100) / 100;
         const err = Math.round((ml - round.target) * 100) / 100;
         setResult({ ml, err });
         if (name.trim()) save({ player: name, targetMl: round.target, pouredMl: ml }).catch((e) => setSaveErr(String(e.message ?? e)));
         else setSaveErr("Enter your name at the top to save scores to the shared leaderboard.");
         return;
       }
-    } else s.settledAt = 0;
+    } else {
+      s.settledAt = 0;
+    }
+
+    setView({ theta: s.theta, poured: s.received, surfaceWobble, q, remaining: s.remaining });
     raf.current = requestAnimationFrame(loop);
   }, [round, name, save]);
 
-  const press = (down: boolean) => {
+  const press = useCallback((down: boolean) => {
     if (result) return;
     const s = st.current;
-    s.holding = down;
+    s.held = down;
     if (down && !s.started) {
       s.started = true;
-      s.last = performance.now();
+      s.last = 0;
       raf.current = requestAnimationFrame(loop);
     }
-  };
+  }, [result, loop]);
+
   const pressRef = useRef(press);
   pressRef.current = press;
   useEffect(() => {
     const typing = (e: KeyboardEvent) => ["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement).tagName);
     const kd = (e: KeyboardEvent) => { if (e.code === "Space" && !e.repeat && !typing(e)) { e.preventDefault(); pressRef.current(true); } };
     const ku = (e: KeyboardEvent) => { if (e.code === "Space" && !typing(e)) pressRef.current(false); };
-    window.addEventListener("keydown", kd); window.addEventListener("keyup", ku);
-    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); };
+    const vis = () => { paused.current = document.hidden; };
+    window.addEventListener("keydown", kd);
+    window.addEventListener("keyup", ku);
+    document.addEventListener("visibilitychange", vis);
+    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); document.removeEventListener("visibilitychange", vis); };
   }, []);
   useEffect(() => () => cancelAnimationFrame(raf.current), []);
+
   const again = () => {
     cancelAnimationFrame(raf.current);
-    st.current = { tilt: 0, ml: 0, flight: [], holding: false, started: false, last: 0, settledAt: 0 };
-    setView({ tilt: 0, ml: 0, air: 0 }); setResult(null); setSaveErr(""); setRound(newRound());
+    st.current = freshS();
+    setView({ theta: 0, poured: 0, surfaceWobble: 0, q: 0, remaining: VIAL_FULL });
+    setResult(null); setSaveErr(""); setRound(newRound());
   };
 
-  // Vial SVG (col a): the tilting container only.
-  const VW = 180, VH = 220;
-  // Beaker SVG (col b): the receiving vessel with the 0..5 scale.
-  const BW = 220, BH = 240, wellTop = 24, wellH = 170, cap = 5;
-  const yMl = (ml: number) => wellTop + wellH - (Math.min(ml, cap) / cap) * wellH;
   const r = board?.robot;
+
+  /* ───────────────── drawing ───────────────── */
+  // One SVG for both figures so the stream can connect vial lip → beaker surface.
+  const W = 460, H = 260;
+  const VIAL_W = 42, VIAL_H = 140;
+  const lipX = 150, lipY = 44;              // the pour point; the vial hangs below and left of here
+  const beakerX = 260, beakerW = 150;       // beaker outer
+  const beakerTop = 32, beakerH = 200;      // beaker interior
+  const SCALE_MAX = 5;
+  const beakerFillH = (view.poured / SCALE_MAX) * beakerH;
+  const beakerSurfaceY = beakerTop + beakerH - beakerFillH + view.surfaceWobble;
+  // Vial local: anchor at (0,0) = lip (top-right); body extends from x=-VIAL_W..0, y=0..VIAL_H
+  const surfaceLocal = (1 - view.remaining / VIAL_FULL) * VIAL_H;
+
+  // Stream path: from the lip (world coords, after rotation lip stays fixed) to beaker surface.
+  const streamVisible = view.q > 0.02;
+  const streamWidth = 1.5 + 4 * Math.sqrt(Math.min(view.q, Q_CAP) / Q_CAP);
+  const streamPath = `M ${lipX} ${lipY + 2} C ${lipX + 60} ${lipY + 40}, ${beakerX + beakerW / 2 - 40} ${beakerSurfaceY - 60}, ${beakerX + beakerW / 2} ${beakerSurfaceY - 2}`;
+  // Animate the stream dashoffset proportional to q.
+  const streamDur = view.q > 0.02 ? Math.max(0.5, 1.4 / view.q) : 2;
+
+  const started = st.current.started;
 
   return (
     <div className="game-grid">
       <section className="card hero game-main">
         <div className="game-head">
           <div>
-            <span className="label">Beat the robot</span>
+            <span className="t-label">Beat the robot</span>
             <h3 className="game-title" style={{ marginTop: 6 }}>Pour exactly <em>{round.target.toFixed(1)} mL</em></h3>
           </div>
           <span className="chip">flow starts at a hidden angle</span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: "var(--rule-2)" }}>
-          {/* column (a): readouts + tilting vial */}
-          <div style={{ background: "var(--panel)", padding: "12px 14px" }}>
-            <div className="readout-grid" style={{ marginBottom: 10 }}>
-              <div>
-                <span className="label">Tilt</span>
-                <div className="fig">{view.tilt.toFixed(0)}°</div>
-              </div>
-              <div>
-                <span className="label">Poured</span>
-                <div className="fig reagent">{view.ml.toFixed(2)} mL</div>
-              </div>
-            </div>
-            <svg viewBox={`0 0 ${VW} ${VH}`} role="img" aria-label={`Tilt ${view.tilt.toFixed(0)} degrees`}
-              style={{ width: "100%", height: "auto", touchAction: "none", userSelect: "none" }}
-              onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); press(true); }}
-              onPointerUp={() => press(false)} onPointerCancel={() => press(false)}>
-              <g transform={`translate(${VW / 2} 70) rotate(${view.tilt})`} style={{ transformOrigin: "0 0" }}>
-                <rect x="-18" y="-60" width="36" height="110" rx="6" fill="rgba(0,0,0,0)" stroke="var(--ink)" strokeWidth="2.4" />
-                <rect x="-15" y="-10" width="30" height="56" rx="4" fill="var(--liq-a)" opacity="0.85" />
-              </g>
-              {view.air > 0.0005 && (
-                <line x1={VW / 2 + 46} y1="96" x2={VW - 18} y2={VH - 24}
-                  stroke="var(--liq-a)" strokeWidth={Math.min(5, 1 + view.air * 40)}
-                  strokeLinecap="round" strokeDasharray="4 3" opacity="0.85" />
-              )}
-            </svg>
+        <div className="readout-grid" style={{ marginTop: 12 }}>
+          <div>
+            <span className="t-label">Tilt</span>
+            <div className="t-num">{view.theta.toFixed(0)}°</div>
           </div>
-
-          {/* column (b): beaker */}
-          <div style={{ background: "var(--panel)", padding: "12px 14px" }}>
-            <svg viewBox={`0 0 ${BW} ${BH}`} role="img" aria-label={`${view.ml.toFixed(2)} mL in beaker, target ${round.target.toFixed(1)}`}
-              style={{ width: "100%", height: "auto", touchAction: "none" }}>
-              <path d={`M60 ${wellTop} v${wellH - 14} q0 14 14 14 h72 q14 0 14 -14 v${-(wellH - 14)}`}
-                fill="rgba(0,0,0,0)" stroke="var(--ink)" strokeWidth="2.4" />
-              <rect x="62" y={yMl(view.ml)} width="96" height={wellTop + wellH - yMl(view.ml) - 1} rx="10" fill="var(--liq-a)" opacity="0.85" />
-              <line x1="48" x2="170" y1={yMl(round.target)} y2={yMl(round.target)} stroke="var(--jade)" strokeDasharray="5 3" strokeWidth="1.5" />
-              <text x="174" y={yMl(round.target) + 4} fontSize="11" fill="var(--jade)" fontFamily="var(--f-mono)">target</text>
-              {[0, 1, 2, 3, 4, 5].map((v) => (
-                <text key={v} x="46" y={yMl(v) + 4} textAnchor="end" fontSize="10" fill="var(--ink-3)" fontFamily="var(--f-mono)">{v}</text>
-              ))}
-            </svg>
-            {!st.current.started && (
-              <p className="mono" style={{ fontSize: 11, color: "var(--ink-3)", letterSpacing: ".08em", textAlign: "center", marginTop: 6 }}>
-                Hold here or hold Space to tilt. Let go early.
-              </p>
-            )}
+          <div>
+            <span className="t-label">Poured</span>
+            <div className="t-num" style={{ color: "var(--reagent)" }}>{view.poured.toFixed(2)} mL</div>
           </div>
         </div>
+
+        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Tilt ${view.theta.toFixed(0)} degrees, ${view.poured.toFixed(2)} mL in beaker`}
+          style={{ width: "100%", height: "auto", marginTop: 10, touchAction: "none", userSelect: "none" }}
+          onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); press(true); }}
+          onPointerUp={() => press(false)} onPointerCancel={() => press(false)}>
+          <defs>
+            <clipPath id="vial-shape">
+              <rect x={-VIAL_W} y={0} width={VIAL_W} height={VIAL_H} rx="6" />
+            </clipPath>
+          </defs>
+
+          {/* vial — rotate about the lip */}
+          <g transform={`translate(${lipX} ${lipY}) rotate(${view.theta})`}>
+            {/* liquid: in a group that counter-rotates about the same point, clipped to the vial */}
+            <g clipPath="url(#vial-shape)">
+              <g transform={`rotate(${-view.theta})`}>
+                <rect x={-VIAL_W * 4} y={surfaceLocal} width={VIAL_W * 8} height={VIAL_H * 4}
+                  fill="var(--liq-a)" opacity="0.85" />
+              </g>
+            </g>
+            <rect x={-VIAL_W} y={0} width={VIAL_W} height={VIAL_H} rx="6"
+              fill="none" stroke="var(--ink)" strokeWidth="2.4" />
+            {/* mouth highlight */}
+            <line x1={-VIAL_W + 2} y1={1.5} x2={-1.5} y2={1.5} stroke="var(--ink)" strokeWidth="2.4" strokeLinecap="round" />
+          </g>
+
+          {/* beaker — straight walls with a stepped base */}
+          <g transform={`translate(${beakerX} ${beakerTop})`}>
+            <path d={`M 0 0 v ${beakerH - 14} q 0 14 14 14 h ${beakerW - 28} q 14 0 14 -14 v ${-(beakerH - 14)}`}
+              fill="none" stroke="var(--ink)" strokeWidth="2.4" />
+            {/* fill */}
+            <rect x={2} y={beakerH - beakerFillH + view.surfaceWobble} width={beakerW - 4}
+              height={Math.max(0, beakerFillH - view.surfaceWobble)} rx={10} fill="var(--liq-a)" opacity="0.85" />
+            {/* 0..5 ticks on the left */}
+            {Array.from({ length: SCALE_MAX + 1 }, (_, v) => {
+              const yT = beakerH - (v / SCALE_MAX) * beakerH;
+              return (
+                <g key={v}>
+                  <line x1={-4} x2={2} y1={yT} y2={yT} stroke="var(--ink-3)" strokeWidth="1" />
+                  <text x={-8} y={yT + 4} textAnchor="end" fontSize="10" fill="var(--ink-3)" fontFamily="var(--mono)">{v}</text>
+                </g>
+              );
+            })}
+            {/* target line (jade, dashed) */}
+            <g>
+              <line x1={-6} x2={beakerW + 6} y1={beakerH - (round.target / SCALE_MAX) * beakerH}
+                y2={beakerH - (round.target / SCALE_MAX) * beakerH}
+                stroke="var(--jade)" strokeDasharray="5 3" strokeWidth="1.5" />
+              <text x={beakerW + 10} y={beakerH - (round.target / SCALE_MAX) * beakerH + 4}
+                fontSize="10" fill="var(--jade)" fontFamily="var(--mono)">target</text>
+            </g>
+          </g>
+
+          {/* stream — rendered last so it sits on top */}
+          {streamVisible && (
+            <path d={streamPath} fill="none" stroke="var(--liq-a)" strokeWidth={streamWidth}
+              strokeDasharray="9 7" strokeLinecap="round" opacity="0.9">
+              <animate attributeName="stroke-dashoffset" from="0" to="-16"
+                dur={`${streamDur.toFixed(2)}s`} repeatCount="indefinite" />
+            </path>
+          )}
+        </svg>
+
+        {!started && (
+          <p className="t-label" style={{ textAlign: "center", marginTop: 6, color: "var(--ink-3)" }}>
+            Hold here or hold Space to tilt. Let go early.
+          </p>
+        )}
 
         {result ? (
           <div className="notice ok" style={{ marginTop: 14 }}>
@@ -160,7 +282,7 @@ export default function Game({ name }: { name: string }) {
 
       <aside className="game-aside">
         <div className="card">
-          <span className="label" style={{ marginBottom: 10, display: "block" }}>Leaderboard · best round per person</span>
+          <span className="t-label" style={{ marginBottom: 10, display: "block" }}>Leaderboard · best round per person</span>
           <div className="tbl">
             <table>
               <thead><tr><th scope="col">Who</th><th scope="col" className="num">Target</th><th scope="col" className="num">Poured</th><th scope="col" className="num">Error</th><th scope="col" className="num">Rounds</th></tr></thead>

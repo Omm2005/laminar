@@ -124,7 +124,7 @@ export default function Data() {
         </div>
         <PourTraces pours={traces} />
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
-          <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)", letterSpacing: ".08em" }}>SELECT time_bucket('1 min', ts), tube, poured_ml FROM lw_pours WHERE tube = $1 ORDER BY ts DESC LIMIT 24;</span>
+          <span className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)" }}>SELECT time_bucket('1 min', ts), tube, poured_ml FROM lw_pours WHERE tube = $1 ORDER BY ts DESC LIMIT 24;</span>
         </div>
       </section>
 
@@ -149,7 +149,7 @@ export default function Data() {
               <span className="val">{latest?.gripperDeg != null ? latest.gripperDeg.toFixed(0) + "°" : "—"}</span>
             </div>
           </div>
-          <p className="mono" style={{ fontSize: 11, color: "var(--ink-3)", letterSpacing: ".08em", marginTop: 10 }}>
+          <p className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 10 }}>
             CAN · {latest ? "connected" : "offline"} · station cam {ok(o) ? `~${(o.pours1h / 3600).toFixed(1)} Hz` : "—"} · wrist cam {ok(o) ? "–" : "—"} fps · OM1 wells {qc?.pours?.length ?? 0}
           </p>
         </section>

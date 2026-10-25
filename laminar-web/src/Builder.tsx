@@ -142,7 +142,7 @@ export default function Builder({ name, onSent }: { name: string; onSent: () => 
             <button type="button" className="btn tertiary" onClick={() => { setRows(STANDARD); setTitle("Standard assay"); setId(null); }}>Standard assay</button>
             <label className="btn tertiary" htmlFor="csv" style={{ cursor: "pointer" }}>Import CSV</label>
             <input id="csv" type="file" accept=".csv,text/csv,text/plain" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); e.target.value = ""; }} />
-            <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--ink-3)", flex: "1 1 200px" }}>tube,well,ml · liquid names work too: red,1,1.0</span>
+            <span className="t-label" style={{ color: "var(--ink-3)", flex: "1 1 200px" }}>tube,well,ml · liquid names work too: red,1,1.0</span>
             {file && <span className="chip">from {file.name}</span>}
             {current?.sourceUrl && !file && <a className="chip" href={current.sourceUrl} target="_blank" rel="noreferrer">source: {current.sourceName}</a>}
             <button type="button" className="btn primary reagent" disabled={!name.trim()} onClick={() => act(persist)}>{id ? "Save new version" : "Save protocol"}</button>

@@ -9,6 +9,7 @@ import Builder from "./Builder";
 import LiveArm from "./robot/LiveArm";
 import Cameras from "./Cameras";
 import Chat from "./Chat";
+import StreamField from "./StreamField";
 import { APPROVE, CANCEL, STOP, readBack, useHoldToTalk, useSpeaker } from "./Voice";
 
 const TABS = [
@@ -48,6 +49,7 @@ export default function Console() {
 
   return (
     <main className="console">
+      <StreamField />
       <div className="console-top">
         <div className="wrap">
           <div className="console-brand">
@@ -315,7 +317,7 @@ function ProgressCard({ run, target, delivered, tol, onStop }: {
         <span className="tick" style={{ left: `calc(${tickPct}% - 1px)` }} />
         <span className="fill" style={{ width: `${fillPct}%` }} />
       </div>
-      <div className="between" style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--ink-3)" }}>
+      <div className="between t-label" style={{ color: "var(--ink-3)" }}>
         <span>Delivered · {delivered.toFixed(2)} mL</span>
         <span>Target · {target.toFixed(2)} mL · ±{tol.toFixed(2)}</span>
       </div>

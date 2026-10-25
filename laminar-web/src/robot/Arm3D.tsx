@@ -105,6 +105,11 @@ async function loadRobot(base: string): Promise<RobotHandle> {
   root.add(links["base_link"]);
   root.rotation.x = -Math.PI / 2;
 
+  // Landing-page palette: arm shell charcoal, joints near-black, gripper fingers warm grey.
+  const SHELL = 0x262C30;
+  const JOINT = 0x0E1113;
+  const FINGER = 0x7F8A90;
+
   const limeMaterials: THREE.MeshPhysicalMaterial[] = [];
   await Promise.all(
     Object.entries(spec.links).map(([name, info]) =>
@@ -112,6 +117,7 @@ async function loadRobot(base: string): Promise<RobotHandle> {
         loader.load(
           base + info.glb,
           (g) => {
+            const isFinger = name === "gripper_left" || name === "gripper_right";
             g.scene.traverse((o) => {
               const mesh = o as THREE.Mesh;
               if (!mesh.isMesh) return;
@@ -122,30 +128,29 @@ async function loadRobot(base: string): Promise<RobotHandle> {
               for (const m of mats) {
                 const sm = m as THREE.MeshStandardMaterial;
                 const upgrade = new THREE.MeshPhysicalMaterial();
-                // copy what we care about (keep vertex colours, basic maps)
-                upgrade.vertexColors = !!sm.vertexColors;
-                upgrade.color = sm.color ? sm.color.clone() : new THREE.Color(0xffffff);
+                upgrade.vertexColors = false;
                 upgrade.map = sm.map ?? null;
                 upgrade.normalMap = sm.normalMap ?? null;
                 upgrade.name = sm.name;
 
                 const cls = sm.color ? classify(sm.color) : "other";
-                if (cls === "lime") {
-                  upgrade.metalness = 0.0;
-                  upgrade.roughness = 0.55;
-                  upgrade.clearcoat = 0.6;
-                  upgrade.clearcoatRoughness = 0.25;
-                  (upgrade as unknown as { _origColor: THREE.Color })._origColor = upgrade.color.clone();
-                  limeMaterials.push(upgrade);
-                } else if (cls === "aluminium") {
-                  upgrade.metalness = 0.6;
-                  upgrade.roughness = 0.35;
+                const target = isFinger ? FINGER : cls === "plastic_black" ? JOINT : SHELL;
+                upgrade.color = new THREE.Color(target);
+                if (isFinger) {
+                  upgrade.metalness = 0.3;
+                  upgrade.roughness = 0.5;
                 } else if (cls === "plastic_black") {
                   upgrade.metalness = 0.0;
                   upgrade.roughness = 0.55;
                 } else {
-                  upgrade.metalness = 0.15;
-                  upgrade.roughness = 0.6;
+                  upgrade.metalness = 0.4;
+                  upgrade.roughness = 0.5;
+                }
+                // keep lime materials in the status tint registry so moving states still
+                // nudge the shell colour per status tint, but default to the shell colour.
+                if (cls === "lime") {
+                  (upgrade as unknown as { _origColor: THREE.Color })._origColor = new THREE.Color(SHELL);
+                  limeMaterials.push(upgrade);
                 }
                 upgraded.push(upgrade);
                 sm.dispose?.();
@@ -496,13 +501,12 @@ function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset,
 
   return (
     <>
-      <color attach="background" args={["#0f1618"]} />
-      <fog attach="fog" args={["#0f1618", 1.4, 3.0]} />
-      <hemisphereLight args={[0xdfe8ff, 0x202834, 0.55]} />
+      <color attach="background" args={["#F3F1EC"]} />
+      <hemisphereLight args={[0xf0f0f0, 0xd8d6cf, 1.15]} />
       <directionalLight
         castShadow
         position={[1.2, 2.0, 0.9]}
-        intensity={1.3}
+        intensity={2.6}
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
         shadow-camera-left={-1}
@@ -511,8 +515,8 @@ function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset,
         shadow-camera-bottom={-1}
         shadow-bias={-0.0002}
       />
-      <Environment preset="city" background={false} environmentIntensity={0.35} />
-      <gridHelper args={[2.4, 24, "#26363a", "#162124"]} position={[0, 0.001, 0]} />
+      <Environment preset="city" background={false} environmentIntensity={0.3} />
+      <gridHelper args={[2.4, 36, "#d8d4ca", "#e2ddd1"]} position={[0, 0.001, 0]} />
       <ContactShadows position={[0, 0, 0]} opacity={0.5} scale={1.8} blur={2.8} far={0.9} />
       <VisionTarget pourChannel={pourChannel} />
       {vision?.live && (
