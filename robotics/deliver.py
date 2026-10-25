@@ -5,7 +5,7 @@ tray markers 10-13, found by markers.py). The flow:
     1. find the tray: scan pose, lock in on the markers (markers.py), container c's (x, y)
     2. grab: back to the neutral (rest) pose, replay the teleop grab of vial A (gripper closes on it)
     3. carry: rise, travel flat, lower over container c (episode.plan_a_to_b: the same moves as grab.py transfer),
-       ending with the tip ABOVE_MM above the height it grabbed the vial at. After the travel and after the lower
+       with the transfer heights (motion.TRANSFER_LIFT_MM up, TRANSFER_LOWER_MM down). After the travel and the lower
        the sag is measured and corrected (markers.settle_on), so the tip really is over the marker centre.
     4. back: rise, travel back over vial A's slot, lower to the grasp pose, replay the grab backwards (the gripper
        releases the vial in its slot, the arm returns to rest).
@@ -28,7 +28,8 @@ import motion as M
 from episode import plan_a_to_b
 from paths import load
 
-ABOVE_MM = 30.0  # over the container the tip stops this much higher than where it grabbed the vial
+# the same rise and lower as every transfer (motion.py): up 150, down 110, so the tip ends 40 mm above the grasp height
+ABOVE_MM = M.TRANSFER_LIFT_MM - M.TRANSFER_LOWER_MM
 # where to go relative to each container's marker, in the tray frame (x along marker 10 -> 13), mm. All zero for
 # now: straight over the marker centre.
 CONTAINER_OFFSET_MM = {1: (0.0, 0.0), 2: (0.0, 0.0), 3: (0.0, 0.0), 4: (0.0, 0.0)}
@@ -47,12 +48,12 @@ def container_target(pose: dict, cont: int) -> np.ndarray:
     return pose["containers"][cont] + T.rot(pose["heading_deg"]) @ np.asarray(CONTAINER_OFFSET_MM[cont], float)
 
 
-def plan_carry(vial: str, xy, above_mm: float = ABOVE_MM) -> tuple[list, dict]:
+def plan_carry(vial: str, xy) -> tuple[list, dict]:
     """[lift, travel, lower] from the vial's grasp pose to over (x, y), and the grasp joints. The vial stays as
     upright as it was grabbed; only its heading turns, with the base."""
     qa = {j: v for j, v in load(vial)["initial_position"].items() if j <= 6}
     pa, Ra = M.fk_mm(qa)
-    target = np.array([xy[0], xy[1], pa[2] + above_mm])
+    target = np.array([xy[0], xy[1], pa[2] + ABOVE_MM])
     turn = math.degrees(math.atan2(xy[1], xy[0]) - math.atan2(pa[1], pa[0]))
     seed = {**qa, 1: qa[1] + turn}
     qb, pe, ae = M.ik(seed, target, T.yaw(turn) @ Ra)
@@ -70,7 +71,6 @@ def main() -> None:
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
     ap.add_argument("--image", help="without --run: find the tray in this scan-pose photo")
     ap.add_argument("--dj1", type=float, default=0.0, help="with --image: the base was turned this much (deg)")
-    ap.add_argument("--above", type=float, default=ABOVE_MM, help="tip over the container, mm above the grasp height")
     ap.add_argument("--camera", type=int, default=T.CAMERA)
     a = ap.parse_args()
     vial, cont = parse(a.job)
@@ -92,7 +92,7 @@ def main() -> None:
           f"tray seen from markers {pose['seen']}")
 
     try:
-        moves, q_grasp = plan_carry(vial, xy, a.above)
+        moves, q_grasp = plan_carry(vial, xy)
     except M.PlanError as e:
         raise SystemExit(f"NOT MOVING: {e}") from None
     for p in moves:
