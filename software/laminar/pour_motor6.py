@@ -64,15 +64,37 @@ class PourConfig:
     target_frac: float = 0.9        # fill target: fraction of FULL with the percent calibration
                                     # (pour_right/left convert it), else fraction of the column box
     max_tilt_deg: float = 85.0      # never tilt further than this from the start angle
-    search_deg_s: float = 15.0      # tilt speed while nothing is flowing yet
+    search_deg_s: float = 15.0      # tilt speed while nothing is flowing yet, up to search_fast_to_deg
+    search_fast_to_deg: float = 40.0    # (nothing pours this early unless the vial is very full)
+    search_slow_deg_s: float = 6.0  # ... then this slowly, so the camera sees the first drop before the wrist
+                                    #   is far past it
+    onset_step: float = 0.012       # a smaller first rise than flow_step: liquid may be starting. Keep the angle
+    onset_hold_s: float = 1.0       #   up to this long to see if it becomes flow, before tilting further
     kp_deg_s: float = 150.0         # deg/s of tilt per (fill/s) of rate error
     max_rate_deg_s: float = 30.0    # tilt speed limit while pouring
+    more_deg_s: float = 15.0        # ... when tilting further: if the stream misses, less goes astray before the
+                                    #   camera sees it (tilting back stays at max_rate_deg_s)
     too_fast_factor: float = 1.5    # rate above allowed x this: tilt back at full speed
     back_deg_s: float = 60.0        # final tilt back to upright
     lag_s: float = 0.3              # s from tilt-back until the stream stops (PourGuide's early stop)
-    dry_s: float = 2.0              # at max tilt with no flow this long -> abort
+    dry_s: float = 5.0              # held at max tilt this long with no flow -> abort (the timer starts when the
+                                    #   wrist gets there: the first drop can take a moment to come out)
     flow_step: float = 0.03         # flow = the level reaching a new high by this much (fill of target):
                                     # noisy readings wobble up and down, they never count as flow
+    rate_noise: float = 0.02        # camera noise in the fill rate (fill/s): "too fast" must beat it by this much
+    rate_deadband: float = 0.01     # rate this close to the allowed rate: keep the angle (don't chase noise)
+    close_enough: float = 0.04      # within this of the target and no progress for close_stall_s: done
+    close_stall_s: float = 4.0
+    lost_stream_s: float = 0.4      # liquid was arriving but the level stopped rising for this long (and for 2.5x
+    lost_tilt_deg: float = 10.0     #   the time one flow_step takes at the allowed rate), with the wrist this far
+                                    #   past where it first flowed: don't tilt further (the stream may be missing
+                                    #   the container; tilting more would pour faster into the wrong place)
+    lost_abort_s: float = 4.0       # ... stuck for this long (and 6x a flow_step's time) below 80 % of the target:
+                                    #   stop (near the target the pour is slow on purpose; close_enough ends it)
+    progress_before_lost: float = 0.1   # the "stream lost" rules apply once this much of the target has gone in
+    abort_back_deg_s: float = 120.0  # tilt back this fast when a pour is stopped (wrong column, overflow, STOP)
+    wrong_column_ml: float = 0.2    # a watched column rising by this much for wrong_column_s = liquid going astray
+    wrong_column_s: float = 0.2
     timeout_s: float = 60.0
     hz: float = 30.0
     overflow_margin: float = 0.05   # final fill above target + this = overfilled
@@ -256,8 +278,11 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
         other = "left" if direction > 0 else "right"
         return PourResult(False, "not_started", f"{why}: roll it back toward 0 first, or pour {other}", column, side)
 
-    guide = PourGuide(tracker, column, target_frac=cfg.target_frac, lag_s=cfg.lag_s,
-                      no_rise_s=0, empty=empty, log_path=log_path)
+    # lag_s=0: PourGuide stops only AT the target; the early stop for liquid still in the air is done below with
+    # the median level and the smoothed rate (its own 0.3 s rate on noisy readings stopped pours far too early)
+    guide = PourGuide(tracker, column, target_frac=cfg.target_frac, lag_s=0.0,
+                      no_rise_s=0, empty=empty, log_path=log_path,
+                      wrong_column_ml=cfg.wrong_column_ml, wrong_column_s=cfg.wrong_column_s)
     guide.begin()
     col = tracker.columns[column]
     box_h = float(col.roi[3])
@@ -269,6 +294,13 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     t0 = last_flow = clock.time()
     flowing = False
     peak = None                     # highest trusted fill so far
+    flow_tilt = None                # wrist angle when liquid first arrived
+    level0 = 0.0                    # the level when the pour began
+    seen: list[tuple[float, float]] = []   # trusted (time, fill) readings for the smoothed rate
+    level = 0.0                     # median fill over the last 0.3 s
+    onset_t = None                  # when the first small rise was seen (before flow is confirmed)
+    at_max_t = None                 # when the wrist reached max tilt
+    rise_peak, last_rise = None, t0 # small new highs (onset_step): a slow first trickle keeps the dry timer waiting
     log: list[dict] = []
     last_action = None
     cmd = None
@@ -291,28 +323,71 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
                 break
 
             allowed = allowed_rate(cmd.fill)
-            if cmd.conf >= 0.5 and cmd.phase != "hold":
+            trusted = cmd.conf >= 0.5 and cmd.phase != "hold"
+            if trusted:
+                seen.append((now, cmd.fill))
+                # the level for "is it rising": median of the last 0.3 s, so one noisy reading never counts as flow
+                level = float(np.median([f for t, f in seen if now - t <= 0.3]))
                 if peak is None:
-                    peak = cmd.fill
-                elif cmd.fill > peak + cfg.flow_step:
-                    peak, flowing, last_flow = cmd.fill, True, now
+                    peak = level0 = level
+                elif level > peak + cfg.flow_step:
+                    if not flowing:
+                        flow_tilt = tilt
+                    peak, flowing, last_flow = level, True, now
+                if not flowing and onset_t is None and level >= level0 + cfg.onset_step:
+                    onset_t = now
+                if rise_peak is None or level > rise_peak + cfg.onset_step:
+                    rise_peak, last_rise = level, now          # (each new high raises the bar: noise can't repeat it)
+            rate = _smoothed_rate(seen, now, cmd.fill, cmd.rate)
+            if trusted and flowing and level + max(rate, 0.0) * cfg.lag_s >= 1.0:
+                result, reason = "done", "target reached"
+                break
+            stuck = now - last_flow
+            # the "stream lost" rules only once liquid has really arrived (noise can fake the first small rise)
+            poured_some = flowing and peak is not None and peak - level0 >= cfg.progress_before_lost
+            step_s = cfg.flow_step / max(allowed, 0.01)     # how long one flow_step takes at the allowed rate
+            lost_after = max(cfg.lost_stream_s, 2.5 * step_s)
+            if flowing and cmd.fill >= 1.0 - cfg.close_enough and stuck > max(cfg.close_stall_s, 2.5 * step_s):
+                result, reason = "done", f"close enough: {cmd.fill:.0%} of the target and no longer rising"
+                break
+            if poured_some and cmd.fill < 0.8 and stuck > max(cfg.lost_abort_s, 6 * step_s):
+                reason = (f"the level stopped rising at {cmd.fill:.0%} of the target for {stuck:.0f} s: "
+                          "the stream is missing the container, or the vial ran dry")
+                break
             if cmd.phase == "hold":
                 action, rate_deg = "hold", 0.0                 # camera unsure: keep the angle
-            elif cmd.rate > allowed * cfg.too_fast_factor:
+            elif rate > allowed * cfg.too_fast_factor + cfg.rate_noise:
                 action, rate_deg = "too_fast", -cfg.max_rate_deg_s
+            elif not flowing and onset_t is not None and now - onset_t < cfg.onset_hold_s:
+                action, rate_deg = "onset", 0.0                # a first rise: wait to see if it is flow
             elif not flowing:
-                action, rate_deg = "tilt_more", cfg.search_deg_s
+                fast = tilt < cfg.search_fast_to_deg and onset_t is None
+                action, rate_deg = "tilt_more", cfg.search_deg_s if fast else cfg.search_slow_deg_s
             else:
-                rate_deg = max(-cfg.max_rate_deg_s, min(cfg.max_rate_deg_s, cfg.kp_deg_s * (allowed - cmd.rate)))
-                action = "slow_down" if rate_deg < -1 else ("tilt_more" if rate_deg > 1 else "hold")
+                err = allowed - rate
+                rate_deg = 0.0 if abs(err) < cfg.rate_deadband else \
+                    max(-cfg.max_rate_deg_s, min(cfg.more_deg_s, cfg.kp_deg_s * err))
+                if poured_some and rate_deg > 0 and stuck > lost_after and tilt > (flow_tilt or 0.0) + cfg.lost_tilt_deg:
+                    rate_deg = 0.0                             # not rising although tilted well past the onset
+                    action = "lost_stream"
+                else:
+                    action = "slow_down" if rate_deg < -1 else ("tilt_more" if rate_deg > 1 else "hold")
             tilt = max(0.0, min(max_tilt, tilt + rate_deg * dt))
-            if tilt >= max_tilt - 1e-6 and now - last_flow > cfg.dry_s:
-                reason = f"no flow at max tilt ({max_tilt:.0f} deg): vial empty or missing the column?"
-                break
+            if tilt >= max_tilt - 1e-6:
+                at_max_t = at_max_t if at_max_t is not None else now
+                if now - max(last_flow, last_rise, at_max_t) > cfg.dry_s:
+                    rose = (peak or 0.0) - level0
+                    seen_what = ("the camera saw no rise at all: is the stream missing the column, or the box off?"
+                                 if rose < cfg.onset_step else
+                                 f"only a small rise ({rose:.0%} of the target): vial nearly empty?")
+                    reason = f"no flow at max tilt ({max_tilt:.0f} deg, held {cfg.dry_s:g} s): {seen_what}"
+                    break
+            else:
+                at_max_t = None
             joint.move_to(base + direction * math.radians(tilt), vlim=math.radians(cfg.max_rate_deg_s * 1.5))
 
-            flow_ml = cmd.rate * to_full * ml_full if ml_full else None
-            rec = {"t": round(now - t0, 3), "tilt_deg": round(tilt, 2), "fill": cmd.fill, "rate": cmd.rate,
+            flow_ml = rate * to_full * ml_full if ml_full else None
+            rec = {"t": round(now - t0, 3), "tilt_deg": round(tilt, 2), "fill": cmd.fill, "rate": round(rate, 4),
                    "allowed": allowed, "ml": cmd.ml, "phase": cmd.phase, "action": action,
                    "full": round(cmd.fill * to_full, 4), "flow_ml_s": round(flow_ml, 3) if flow_ml is not None else None}
             log.append(rec)
@@ -327,7 +402,7 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
     except KeyboardInterrupt:
         reason = "stopped by operator"
     finally:
-        _tilt_back(joint, base, tilt, cfg, clock)
+        _tilt_back(joint, base, tilt, cfg, clock, fast=result != "done")
 
     # read the level again once what was still in the air has landed
     end = clock.time() + cfg.lag_s + 0.5
@@ -368,10 +443,26 @@ def _pour(joint, tracker, column: str, direction: int, empty=(), cfg: PourConfig
                       wrong_column=wrong, wrong_side=wrong_side, log=log, guide=guide.summary())
 
 
-def _tilt_back(joint, base: float, tilt_deg: float, cfg: PourConfig, clock) -> None:
-    """Back upright at a controlled speed; every pour ends this way."""
-    joint.move_to(base, vlim=math.radians(cfg.back_deg_s))
-    end = clock.time() + tilt_deg / cfg.back_deg_s + 1.0
+def _smoothed_rate(seen: list, now: float, fill: float, fallback: float) -> float:
+    """Fill rate (fill/s) from a straight-line fit over the trusted readings; the window grows a little as the target
+    gets close (smaller allowed rate, so camera noise matters more), but stays short enough not to lag."""
+    window = 0.3 if fill < 0.6 else (0.4 if fill < 0.85 else 0.5)
+    while seen and now - seen[0][0] > 1.2:
+        seen.pop(0)
+    pts = [(t, f) for t, f in seen if now - t <= window]
+    if len(pts) < 4:
+        return fallback
+    tt, ff = np.array(pts).T
+    if np.ptp(tt) < 1e-6:
+        return fallback
+    return float(np.polyfit(tt - tt[-1], ff, 1)[0])
+
+
+def _tilt_back(joint, base: float, tilt_deg: float, cfg: PourConfig, clock, fast: bool = False) -> None:
+    """Back upright at a controlled speed (faster when the pour was stopped); every pour ends this way."""
+    speed = cfg.abort_back_deg_s if fast else cfg.back_deg_s
+    joint.move_to(base, vlim=math.radians(speed))
+    end = clock.time() + tilt_deg / speed + 1.0
     while clock.time() < end:
         p = joint.position()
         if p is not None and abs(p - base) < 0.02:
