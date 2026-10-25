@@ -436,7 +436,8 @@ def hand_joints() -> dict[int, float]:
             pos = _BUS.read_param_f32(mid, P_MECH_POS, timeout=0.2)
             if pos is None:
                 raise RuntimeError(f"J{mid} did not answer")
-            q[mid] = math.degrees(pos) - zero[mid]  # the encoders report the real angle: no unwrapping
+            d = math.degrees(pos) - zero[mid]
+            q[mid] = d - 360.0 * round(d / 360.0)  # single-turn wrap after power-up (J6 reads ~+-180 at rest)
         return q
     a = once()
     time.sleep(0.3)
