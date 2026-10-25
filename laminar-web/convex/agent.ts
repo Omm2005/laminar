@@ -6,6 +6,7 @@
  *    submit_plan      - tasks [{tube, pours: [{well, ml}]}]; the CHECKER (lib.ts, plain code) answers ok or the errors
  *    request_approval - a checked plan becomes a run waiting for a person, shown in the chat as a plan card
  *    get_run_report   - what a run did: each pour against its target, why it stopped
+ *    search_glossary  - the team's terms and notation (HANDOFF/00-glossary-and-notation.md, copied into glossary.ts)
  * There is no approve tool: approve, cancel and stop come only from a named person (messages.decide, or the Run tab).
  * Without ANTHROPIC_API_KEY the rule planner in lib.ts answers instead, so the chat still works offline.
  */
@@ -14,6 +15,7 @@ import { v } from "convex/values";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { searchGlossary } from "./glossarySearch";
 import { CONTROL_WELL, LOW_TUBE_ML, describe, MAX_A_ALIQUOTS, MAX_POUR_ML, MIN_POUR_ML, WELL_CAPACITY_ML, check, expand, rulePlan, type Task } from "./lib";
 
 const MODEL = "claude-opus-5-5";
@@ -37,6 +39,9 @@ You never start, approve or stop the robot and you never say a plan is approved 
   history shows the plan as it is now.
 - If the tube, the well or the volume is unclear, ask one short question. Never invent a volume.
 - Plain questions (what's in the tubes, how did the last run go) need no plan.
+- The team's words and notation (liquids A-D vs containers a-d, wells, channels, job names like A2b, markers, phases,
+  units) are defined in the team glossary: call search_glossary whenever a term, letter or notation is unclear, and
+  use the glossary's meaning.
 - Replies are read aloud: one to three short sentences, plain words, no markdown.`;
 
 const TASKS_SCHEMA = {
@@ -89,6 +94,15 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
     description: "What happened in a run: status, each pour's target and measured volume, the readout, why it stopped. " +
       "Leave run_id empty for the latest finished run.",
     input_schema: { type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"], additionalProperties: false },
+    strict: true,
+  },
+  {
+    name: "search_glossary",
+    description: "Search the team glossary (terms and notation: liquids/tubes A-D, containers/wells a-d, channels, " +
+      "job notation like A2b or B2b:+50, episode phases, markers, units, known inconsistencies). Returns the best " +
+      "matching sections, in the glossary's own words.",
+    input_schema: { type: "object", properties: { query: { type: "string", description: "words to look up, e.g. \"container b\" or \"A2b:+50\"" } },
+                    required: ["query"], additionalProperties: false },
     strict: true,
   },
 ];
@@ -187,12 +201,13 @@ export const chat = internalAction({
         if (resp.stop_reason !== "tool_use" || !uses.length) break;
         const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
         for (const u of uses) {
-          const input = u.input as { tasks?: Task[]; note?: string; plan_id?: string; run_id?: string };
+          const input = u.input as { tasks?: Task[]; note?: string; plan_id?: string; run_id?: string; query?: string };
           let out: unknown;
           if (u.name === "get_bench_state") out = benchFacts(await bench(), await ctx.runQuery(api.runs.list, { limit: 5 }));
           else if (u.name === "submit_plan") out = await submit(input.tasks ?? [], String(input.note ?? "").slice(0, 300));
           else if (u.name === "request_approval") out = await requestApproval(String(input.plan_id ?? ""), MODEL);
           else if (u.name === "get_run_report") out = await report(ctx, String(input.run_id ?? ""));
+          else if (u.name === "search_glossary") out = searchGlossary(String(input.query ?? ""));
           else out = { ok: false, errors: [`unknown tool ${u.name}`] };
           const failed = typeof out === "object" && out !== null && "ok" in out && (out as { ok: boolean }).ok === false;
           results.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify(out), is_error: failed });
