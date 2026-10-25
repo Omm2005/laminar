@@ -121,6 +121,15 @@ TILT_SPEED_DEG_S = 10.0   # wrist roll speed for the sample pour
 TILT_HOLD_S = 2.0         # held tilted this long
 
 
+def measured_miss(client, settle_s: float = 0.5) -> np.ndarray:
+    """(x, y, z) mm from where the tip really is (encoders) to where it is commanded: the sag here."""
+    T.time.sleep(settle_s)
+    st = client.status()
+    p_meas, _ = M.fk_mm({j: float(st["state"][f"J{j}"]) for j in range(1, 7)})
+    p_cmd, _ = M.fk_mm(client.current_joints())
+    return p_cmd - p_meas
+
+
 def into_tray(pose: dict) -> np.ndarray:
     """Unit (x, y): across the tray line, away from the arm base: from the marker strip into the containers."""
     th = math.radians(float(pose["heading_deg"]))
@@ -306,13 +315,30 @@ def main(argv=None) -> None:
         try:
             _phase("grab")
             grab.play(vial, run=True)
-            for mv in moves:
+            lift, travel, lower, turn = moves
+            done = []
+            for mv in (lift, travel):
                 _phase(mv.label.split()[0])
                 print("  " + str(client.run(mv).get("result")))
+                done.append(mv)
+            # the arm sags by a pose-dependent amount (20-30 mm down when stretched out). Measure it here, at the
+            # carry height, and stop the lower that much short (in the command), so the tip ENDS on the pour point
+            # instead of overshooting and climbing back up to it; settle_on then only trims the last few mm
+            p_pour, R_pour = M.fk_mm(turn.final_joints)
+            sag = measured_miss(client)
+            print(f"  sag at the carry height: tip {np.linalg.norm(sag):.1f} mm off ({sag[0]:+.1f}, {sag[1]:+.1f}, "
+                  f"{sag[2]:+.1f}): lowering that much short")
+            q = client.current_joints()
+            for mv in (M.plan_line(q, p_pour + sag, None, speed_mm_s=M.DEFAULT_LOWER_SPEED, label="lower"),):
+                _phase("lower")
+                print("  " + str(client.run(mv).get("result")))
+                done.append(mv)
+            _phase("turn")
+            mv = M.plan_turn(client.current_joints(), R_pour, label="turn into the pour pose")
+            print("  " + str(client.run(mv).get("result")))
+            done.append(mv)
             _phase("settle")
-            # the arm sags by a pose-dependent amount (20 mm down at a stretched pose): put the MEASURED tip on the
-            # pour point, then take the nudge back out before reversing the planned moves
-            p_pour, _ = M.fk_mm(moves[-1].final_joints)
+            p_hold, _ = M.fk_mm(client.current_joints())
             err, _ = T.settle_on(client, p_pour)
             print(f"at the pour pose over container {'abcd'[cont - 1]} (tip within {err:.1f} mm): holding 2 s")
             T.time.sleep(2.0)
@@ -336,9 +362,9 @@ def main(argv=None) -> None:
                               "speed": TILT_SPEED_DEG_S})
                 print("  wrist back upright")
             _phase("return")
-            back = M.plan_line(client.current_joints(), p_pour, None, speed_mm_s=10.0, label="undo the sag nudge")
+            back = M.plan_line(client.current_joints(), p_hold, None, speed_mm_s=10.0, label="undo the sag trim")
             print("  " + str(client.run(back).get("result")))
-            for mv in reversed(moves):
+            for mv in reversed(done):
                 print("  " + str(client.run(reverse_path(mv)).get("result")))
             _phase("release")
             grab.play(vial, run=True, reverse=True)

@@ -35,6 +35,8 @@ CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
 TILT_FILE = HERE / "arm_tilt.json"   # live pour-roll targets for the tilt_stream op
 POSE_FILE = HERE / "arm_pose.json"   # live J1-J6 targets for the pose_stream op
+STREAM_TAU_S = 0.12         # tilt/pose streams: each joint closes on its live target with this time constant ...
+STREAM_ACC_DEG_S2 = 400.0   # ... and its speed changes by at most this: no velocity steps (they shook the table)
 PATH_START_TOL_DEG = 2.0    # a path must start where the arm is commanded now
 PATH_MAX_JOINT_SPEED = 90.0  # deg/s between consecutive path points; faster = refused
 SMOOTH_MAX_DEV_DEG = 3.0    # every path is smoothed (smooth_path.py) unless that would move it further than this
@@ -294,6 +296,7 @@ def main():
         for timeout_s, or says done, the joint returns to base and the op ends."""
         cmd[joint] = clamp(joint, cmd[joint])
         target = 0.0
+        vel = {joint: 0.0}
         last_seq, last_t = None, time.time()
         ended = "done"
         t_status = 0.0
@@ -311,19 +314,26 @@ def main():
             if time.time() - last_t > timeout_s:
                 ended = f"watchdog: no tilt update for {timeout_s:.2f}s"
                 break
-            goal = clamp(joint, base + target)
-            step = max_rate * dt
-            cmd[joint] += max(-step, min(step, goal - cmd[joint]))
+            follow({joint: clamp(joint, base + target)}, vel, max_rate)
             tick()
             if time.time() - t_status > 0.2:
                 t_status = time.time()
                 write_status(busy=True, doing="tilt_stream", tilt_deg=round(cmd[joint] - base, 1))
-        while abs(cmd[joint] - base) > 0.05:  # back to upright at the same rate limit
-            step = max_rate * dt
-            cmd[joint] += max(-step, min(step, base - cmd[joint]))
+        while abs(cmd[joint] - base) > 0.05 or abs(vel[joint]) > 0.5:  # back to upright, same smooth tracking
+            follow({joint: base}, vel, max_rate)
             tick()
         cmd[joint] = base
         return f"tilt_stream ended ({ended}), J{joint} back at {base:.1f}"
+
+    def follow(goal, vel, max_rate):
+        """One tick of smooth tracking for the live streams: each joint's speed heads for (goal - cmd) / STREAM_TAU_S
+        (at most max_rate), changing by at most STREAM_ACC_DEG_S2 per second. The old bang-bang step (full speed,
+        then stop, at every 25 Hz update) put 30-90 deg/s velocity jumps into the feedforward and shook the arm."""
+        for m, g in goal.items():
+            want = max(-max_rate, min(max_rate, (g - cmd[m]) / STREAM_TAU_S))
+            dv = STREAM_ACC_DEG_S2 * dt
+            vel[m] += max(-dv, min(dv, want - vel[m]))
+            cmd[m] = clamp(m, cmd[m] + vel[m] * dt)
 
     def pose_stream(max_rate, timeout_s):
         """Live control of J1-J6 from POSE_FILE: {"seq": n, "joints": {"1": deg, ...}, "done": bool}, each joint
@@ -332,6 +342,7 @@ def main():
         arm = [m for m in ids if m != GRIPPER]
         base = {m: clamp(m, cmd[m]) for m in arm}
         goal = dict(base)
+        vel = {m: 0.0 for m in arm}
         last_seq, last_t = None, time.time()
         ended = "done"
         t_status = 0.0
@@ -348,17 +359,13 @@ def main():
             if time.time() - last_t > timeout_s:
                 ended = f"watchdog: no pose update for {timeout_s:.2f}s"
                 break
-            step = max_rate * dt
-            for m in arm:
-                cmd[m] += max(-step, min(step, goal[m] - cmd[m]))
+            follow(goal, vel, max_rate)
             tick()
             if time.time() - t_status > 0.2:
                 t_status = time.time()
                 write_status(busy=True, doing="pose_stream")
-        while max(abs(cmd[m] - base[m]) for m in arm) > 0.05:  # back where it started, same rate limit
-            step = max_rate * dt
-            for m in arm:
-                cmd[m] += max(-step, min(step, base[m] - cmd[m]))
+        while max(abs(cmd[m] - base[m]) for m in arm) > 0.05 or max(abs(vel[m]) for m in arm) > 0.5:
+            follow(base, vel, max_rate)    # back where it started, same smooth tracking
             tick()
         for m in arm:
             cmd[m] = base[m]
