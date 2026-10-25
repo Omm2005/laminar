@@ -336,3 +336,23 @@ input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 
   .joints-grid { grid-template-columns: repeat(2, 1fr); }
   .bench-vials { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Runs page (Tiger Data) */
+.runs-page { display: flex; flex-direction: column; gap: var(--s4); }
+.runs-grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: var(--s4); align-items: start; }
+.runs-detail { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.runs-list { display: flex; flex-direction: column; gap: var(--s1); max-height: 80vh; overflow-y: auto; }
+.run-row { text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--s2);
+  padding: var(--s2) var(--s3); cursor: pointer; }
+.run-row:hover { background: var(--card-2); }
+.run-row-on { background: var(--card-2); border-color: var(--line); }
+.run-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-joint-on td { background: var(--card-2); }
+.run-running { color: var(--accent); }
+.run-done { color: var(--ok); }
+.run-failed, .run-estop, .run-aborted { color: var(--bad); }
+.run-hints { margin: 0 0 var(--s2); padding-left: var(--s4); display: flex; flex-direction: column; gap: var(--s1); }
+.tiger-stats { display: flex; flex-wrap: wrap; gap: var(--s5); margin-top: var(--s3); }
+.tiger-big { font-size: var(--f-h2); font-weight: 600; }
+@media (max-width: 800px) { .runs-grid { grid-template-columns: 1fr; } .runs-list { max-height: 40vh; } }
+.runs-page .row { display: flex; gap: var(--s2); }

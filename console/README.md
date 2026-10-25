@@ -52,6 +52,7 @@ npm run dev                     # http://localhost:5173
 | `flowTable.ts` | get, update, cron-called `refitInternal` (least-squares over recent pours) |
 | `bench.ts` | state (<200 bytes), approve (bench head unit), heartbeat, nodes |
 | `crons.ts` | every 10 min → `flowTable.refitInternal` |
+| `tiger.ts` | Node actions reading Tiger Data (`overview`, `runs`, `runDetail`) for the Runs page; needs `npx convex env set TIGER_DATABASE_URL "postgres://..."` |
 
 ### Frontend (`src/`)
 | page | what it shows |
@@ -60,6 +61,7 @@ npm run dev                     # http://localhost:5173
 | `/live` | 6 joint gauges, pour chart (mL vs s with target line), current step, STOP button, bench node heartbeats |
 | `/history` | pours table with error, before/after thumbnails |
 | `/settings` | flow table editor (onsetDeg, pourDeg, rates list) |
+| `/runs` | every run logged to Tiger: per-joint tracking error / jerk / stick-slip, commanded vs measured charts, smoothing hints |
 
 All data via `useQuery` — no polling, Convex pushes updates.
 
@@ -89,3 +91,17 @@ during polling). The pour chart on `/live` stays empty until that's wired.
 - `VITE_CONVEX_URL is not set` in the browser console → run `npx convex dev` once in this folder.
 - Planner says `ANTHROPIC_API_KEY is not set` → add it in the Convex dashboard → Settings → Environment variables.
 - The seed script says `CONVEX_URL not set` → make sure `.env.local` exists (it's created by `npx convex dev`).
+
+## Runs in Tiger Data (trajectory smoothing)
+
+With `TIGER_DATABASE_URL` set, `bridge/run_job.py` logs every job as a run: an `arm_runs` row, its hook
+events, and the 100 Hz arm trace that `robotics/arm_server.py` writes (`robotics/arm_trace.py`). Any other
+command can be logged the same way, and the Runs page shows it:
+
+```bash
+cd software
+python -m laminar.tiger init                                     # once: tables + SQL functions
+python -m laminar.tiger run --name "vial A" -- python ../robotics/transfer.py vial_A well_3
+python -m laminar.tiger smooth                                   # per-joint numbers for the last run
+python -m laminar.tiger import ../robotics/recordings/<episode>  # a teleop recording as a run
+```

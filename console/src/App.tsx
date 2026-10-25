@@ -4,6 +4,7 @@ import Bench from "./pages/Bench";
 import Work from "./pages/Work";
 import Robot from "./pages/Robot";
 import Audit from "./pages/Audit";
+import Runs from "./pages/Runs";
 import Jobs from "./pages/Jobs";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
@@ -17,6 +18,7 @@ export default function App() {
           <NavLink to="/bench">Bench</NavLink>
           <NavLink to="/work">Work</NavLink>
           <NavLink to="/robot">Robot</NavLink>
+          <NavLink to="/runs">Runs</NavLink>
           <NavLink to="/audit">Audit</NavLink>
         </nav>
       </header>
@@ -27,6 +29,7 @@ export default function App() {
           <Route path="/bench" element={<Bench />} />
           <Route path="/work" element={<Work />} />
           <Route path="/robot" element={<Robot />} />
+          <Route path="/runs" element={<Runs />} />
           <Route path="/audit" element={<Audit />} />
           {/* keep the older views reachable but not in the primary nav */}
           <Route path="/live" element={<Navigate to="/robot" replace />} />

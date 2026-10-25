@@ -6,6 +6,10 @@ way transfer.main() does, and runs it. Every Convex hook (step_start, step_end,
 pushLevels, pour_record, setStatus) is wrapped in try/except so a cloud outage
 or schema mismatch can never derail the robot.
 
+With TIGER_DATABASE_URL set, each job is also a Tiger run (software/laminar/tiger.py RunLogger):
+an arm_runs row, every hook below as a laminar_events row tagged with the job id, and the 100 Hz
+arm trace while the job runs. The console's Runs page reads it back for trajectory analysis.
+
 Convex job fields consumed:
     jobId      (jobs._id)
     vial       (number 1..) -> "vial_A", "vial_B", ...
@@ -35,6 +39,7 @@ sys.path.insert(0, str(LAMINAR / "software"))
 sys.path.insert(0, str(LAMINAR / "sense"))
 
 from convex import ConvexClient  # noqa: E402
+from laminar.tiger import RunLogger                          # noqa: E402
 
 # Their code — imported unchanged.
 import motion as M                                           # noqa: E402
@@ -70,11 +75,14 @@ def well_name(n: int) -> str:
 class CloudHooks:
     """Thin, failure-tolerant wrapper around Convex mutations. One bad push doesn't abort the job."""
 
-    def __init__(self, convex: ConvexClient, job_id: str):
+    def __init__(self, convex: ConvexClient, job_id: str, tiger: RunLogger | None = None):
         self.c = convex
         self.job_id = job_id
+        self.tiger = tiger
 
     def _safe(self, name: str, path: str, args: dict):
+        if self.tiger:
+            self.tiger.event(f"job.{name}", {k: v for k, v in args.items() if k != "jobId"})
         try:
             return self.c.mutation(path, args)
         except Exception as e:
@@ -184,6 +192,15 @@ def run_one_job(convex: ConvexClient, job: dict, a: argparse.Namespace) -> None:
             hooks.event("error", f"camera: {e}")
             return
 
+    # the Tiger run starts with the first move, so a job refused above leaves no half-open run behind
+    tiger = None
+    if not a.dry_run:
+        try:
+            tiger = RunLogger.start(job_id, name=f"{target_ml:.2f} mL {vial} -> {comp}",
+                                    meta={"vial": vial, "well": comp, "target_ml": target_ml, "source": "run_job"})
+        except Exception as e:
+            print(f"[tiger] run not logged: {e!r}")
+    hooks.tiger = tiger
     overall_ok = True
     end_status = "done"
     try:
@@ -258,6 +275,8 @@ def run_one_job(convex: ConvexClient, job: dict, a: argparse.Namespace) -> None:
                 pass
         hooks.set_status(end_status)
         hooks.event("info" if overall_ok else "error", f"job done, status={end_status}")
+        if tiger:
+            print(f"[tiger] {tiger.finish(end_status)}")
 
 
 def main() -> None:
