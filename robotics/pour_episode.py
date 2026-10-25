@@ -139,11 +139,39 @@ class Watch:
         self.cam.stop()
 
 
-def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record: dict, mode: str = "tip"):
+DRY_TILT_DEG_S = 15.0     # the pour's own search speed
+DRY_HOLD_S = 3.0
+
+
+def dry_tilt(joint, direction: int, max_tilt: float, watch: "Watch"):
+    """Tilt straight to max_tilt (capped at the joint's reach), hold, back to 0: the pour motion without the camera."""
+    import math
+    from types import SimpleNamespace
+    base = joint.position()
+    limit = joint.hi if direction > 0 else joint.lo
+    reach = min(max_tilt, math.degrees((limit - base) * direction) - 1.0)
+    print(f"  dry tilt: to {reach:.0f} deg at {DRY_TILT_DEG_S:g} deg/s, hold {DRY_HOLD_S:g} s, back")
+    joint.move_to(base + direction * math.radians(reach), vlim=math.radians(DRY_TILT_DEG_S))
+    t0 = time.time()
+    while abs(math.degrees(joint.position() - base)) < reach - 0.5 and time.time() - t0 < reach / DRY_TILT_DEG_S + 15:
+        time.sleep(0.1)
+    watch.set_phase("dry tilt at max")
+    print(f"  at {math.degrees(joint.position() - base) * direction:.1f} deg")
+    time.sleep(DRY_HOLD_S)
+    joint.move_to(base, vlim=math.radians(DRY_TILT_DEG_S * 2))
+    while abs(math.degrees(joint.position() - base)) > 0.5:
+        time.sleep(0.1)
+    return SimpleNamespace(ok=True, result="dry", reason=f"tilted to {reach:.0f} deg and back", max_tilt_deg=reach)
+
+
+def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record: dict, mode: str = "tip",
+              dry: bool = False):
     """deliver.HOOKS["pour"]: the level-model pour into `column`, tipping the vial's top towards the tray.
     mode "tip" (default): every joint tips the gripper about a horizontal axis through the gripper tip (pour_tilt.py),
     the tip locked in place; first the gripper turns in place to the heading from which the tilt goes furthest.
-    mode "roll": wrist roll (J6) only, as before (stops at J6's 90 deg limit)."""
+    mode "roll": wrist roll (J6) only, as before (stops at J6's 90 deg limit).
+    dry: no vision control: tilt straight to max_tilt (or as far as the arm goes) at DRY_TILT_DEG_S, hold, back
+    upright: checks the motion with an empty vial."""
     from laminar import pour_motor6 as P6
     import motion as M
     import markers as T
@@ -172,8 +200,11 @@ def make_pour(watch: Watch, column: str, target: float, max_tilt: float, record:
                   f"{'+' if direction > 0 else '-'}), target {target:.0%} of the box, max tilt {max_tilt:g} deg")
             joint = P6.ServerTiltJoint(6)
         try:
-            r = P6._pour(joint, watch.tracker, column, direction, empty=[], cfg=cfg,
-                         log_path=str(watch.out / "pour_guide.jsonl"))
+            if dry:
+                r = dry_tilt(joint, direction, max_tilt, watch)
+            else:
+                r = P6._pour(joint, watch.tracker, column, direction, empty=[], cfg=cfg,
+                             log_path=str(watch.out / "pour_guide.jsonl"))
         finally:
             joint.close()      # upright again: arm_server takes the arm back to where the stream started
         time.sleep(1.0)
@@ -197,6 +228,7 @@ def main() -> None:
     ap.add_argument("--run", action="store_true", help="move the arm (arm_server.py must be running)")
     ap.add_argument("--target", type=float, default=0.9, help="stop at this fraction of the column box")
     ap.add_argument("--max-tilt", type=float, default=140.0, help="never tip the vial further than this (deg)")
+    ap.add_argument("--dry-tilt", action="store_true", help="no vision: tilt to --max-tilt and back (empty vial)")
     ap.add_argument("--pour-mode", choices=["tip", "roll"], default="tip",
                     help="tip: every joint tips the gripper, tip locked (default); roll: wrist roll J6 only")
     ap.add_argument("--side-cam", type=int, default=2, help="side (level) camera index")
@@ -221,7 +253,7 @@ def main() -> None:
     time.sleep(2.0)
     record: dict = {"job": a.job, "column": column, "target": a.target, "start": watch.snapshot()}
     D.HOOKS["phase"] = watch.set_phase
-    D.HOOKS["pour"] = make_pour(watch, column, a.target, a.max_tilt, record, a.pour_mode)
+    D.HOOKS["pour"] = make_pour(watch, column, a.target, a.max_tilt, record, a.pour_mode, a.dry_tilt)
     err = None
     try:
         D.main([a.job, "--run", "--camera", str(a.wrist_cam)])
