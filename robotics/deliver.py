@@ -167,7 +167,7 @@ def plan_pour_carry(vial: str, p, R, seed) -> tuple[list, dict, dict]:
     travel = M.plan_travel(lift.final_joints, {"xy_mm": p[:2].tolist(), "R": (T.yaw(yw) @ Ra).tolist()},
                            label="travel to the pour pose")
     lower = M.plan_lower(travel.final_joints, lift_mm - (p[2] - pa[2]))
-    turn = M.plan_line(lower.final_joints, p, R, speed_mm_s=M.DEFAULT_LOWER_SPEED, label="turn into the pour pose")
+    turn = M.plan_turn(lower.final_joints, R, label="turn into the pour pose")
     return [lift, travel, lower, turn], qa, dict(qb)
 
 

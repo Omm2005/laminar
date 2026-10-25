@@ -90,3 +90,18 @@ def test_a_moved_tray_still_plans_a_pour_carry():
     p, R, seed = D.pour_pose(moved, 1, offs)
     moves, qa, qp = D.plan_pour_carry("vial_A", p, R, seed)
     assert [m.label.split()[0] for m in moves] == ["lift", "travel", "lower", "turn"]
+
+
+def test_the_carry_ends_exactly_in_the_taught_pour_joints():
+    # the last move turns in place (the tip doesn't move): it must still be planned, not skipped
+    import motion as M
+    offs = D.load_offsets() or D.learn_offsets(_tray_at_the_final_positions())
+    q = {int(k): float(v) for k, v in offs[2]["joints"].items()}
+    p, R = M.fk_mm(q)
+    moves, qa, qp = D.plan_pour_carry("vial_A", p, R, q)
+    turn = moves[-1]
+    assert turn.label.startswith("turn") and len(turn.joints) > 10
+    assert np.allclose(M.fk_mm(turn.final_joints)[0], p, atol=1.0)
+    assert max(abs(turn.final_joints[j] - q[j]) for j in range(1, 7)) < 0.5
+    for qj in turn.joints:                       # the tip holds still while the gripper turns
+        assert np.linalg.norm(M.fk_mm(qj)[0] - p) < 1.0

@@ -324,6 +324,49 @@ def plan_line(q_start, end_mm, R_end=None, *, speed_mm_s: float, label: str,
     return Path(times, [_dict(j) for j in joints], label, p0, p1, worst_pos, worst_ang, notes)
 
 
+TURN_SPACING_DEG = 0.5         # plan_turn: orientation step between IK solves
+DEFAULT_TURN_SPEED = 10.0      # deg/s peak turn speed of the gripper in plan_turn
+
+
+def plan_turn(q_start, R_end, *, speed_deg_s: float = DEFAULT_TURN_SPEED, label: str = "turn in place") -> Path:
+    """Turn the gripper in place: the tip stays where it is while the orientation blends to R_end.
+    plan_line can't do this (no distance to travel = nothing to plan). Same checks and timing as plan_line."""
+    q0 = _as_dict(q_start)
+    p0, R0 = fk_mm(q0)
+    R1 = np.asarray(R_end, dtype=float)
+    ang = math.degrees(math.acos(max(-1.0, min(1.0, (float(np.trace(R1 @ R0.T)) - 1.0) / 2.0))))
+    if ang < 0.2:
+        return Path([0.0], [q0], label, p0, p0)
+    n = max(2, int(math.ceil(ang / TURN_SPACING_DEG)) + 1)
+    samples_q: list[np.ndarray] = [_vec(q0)]
+    worst_pos, worst_ang = 0.0, 0.0
+    q_prev = q0
+    for k in range(1, n):
+        q_k, pe, ae = ik(q_prev, p0, _slerp(R0, R1, k / (n - 1)))
+        if pe > POS_TOL_MM or ae > ANG_TOL_DEG:
+            raise PlanError(f"{label}: IK missed sample {k}/{n - 1} by {pe:.1f} mm / {ae:.1f} deg "
+                            f"(out of reach, or a joint limit is in the way)")
+        jump = np.abs(_vec(q_k) - samples_q[-1])
+        if jump.max() > MAX_JUMP_PER_MM_DEG:
+            j = int(jump.argmax()) + 1
+            raise PlanError(f"{label}: J{j} jumps {jump.max():.1f} deg between samples {k - 1} and {k} "
+                            f"(the arm would flip configuration)")
+        worst_pos, worst_ang = max(worst_pos, pe), max(worst_ang, ae)
+        samples_q.append(_vec(q_k))
+        q_prev = q_k
+    duration = 1.875 * ang / speed_deg_s
+    S = np.array(samples_q)
+    for _ in range(20):
+        times, joints = _sample_in_time(S, duration)
+        rates = np.abs(np.diff(np.array(joints), axis=0)) * CONTROL_HZ
+        if float(rates.max()) <= MAX_JOINT_SPEED_DEG_S:
+            break
+        duration *= float(rates.max()) / MAX_JOINT_SPEED_DEG_S * 1.05
+    else:
+        raise PlanError(f"{label}: could not keep joint speeds under {MAX_JOINT_SPEED_DEG_S} deg/s")
+    return Path(times, [_dict(j) for j in joints], f"{label} ({ang:.1f} deg)", p0, p0, worst_pos, worst_ang)
+
+
 def _sample_in_time(S: np.ndarray, duration: float):
     """Turn evenly spaced geometric samples S (n x 6) into control-rate targets with a
     minimum-jerk speed profile. Joints between two geometric samples are linearly interpolated
