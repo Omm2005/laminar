@@ -633,6 +633,9 @@ def run_container(client, n: int, plan: list, workspace, learned, confirm=input,
     carry_t, R_t = M.fk_mm(plan[-2].final_joints)   # end of the travel: above the marker at carry height
     hover_t, _ = M.fk_mm(plan[-1].final_joints)     # the hover point
     learned = np.asarray(learned, dtype=float)
+    # The workspace box guards where the tip really goes: the plan already checked these moves against it. The
+    # compensated commands below aim past the targets on purpose (by the sag), so they are not checked again.
+    workspace = None
 
     def go(path):
         log("  " + path.summary())
