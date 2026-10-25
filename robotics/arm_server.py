@@ -34,7 +34,7 @@ import sys
 import time
 
 from leader_arm import HERE, MAPPING, load_follower_zero
-from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
+from robstride_can import boost_process, JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
 import arm_trace  # 100 Hz cmd/pos/vel/torque trace for Tiger (trajectory analysis)
 
 CMD_FILE = HERE / "arm_cmd.json"
@@ -94,23 +94,6 @@ def smoothstep(s):
     return s * s * (3 - 2 * s)
 
 
-def boost_process() -> None:
-    """Windows: high priority and no power throttling (EcoQoS) for this process only, so the 100 Hz loop is not
-    parked for hundreds of ms while the laptop saves power."""
-    if sys.platform != "win32":
-        return
-    import ctypes
-    k32 = ctypes.windll.kernel32
-    proc = k32.GetCurrentProcess()
-    k32.SetPriorityClass(proc, 0x80)  # HIGH_PRIORITY_CLASS
-
-    class Throttle(ctypes.Structure):
-        _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong), ("StateMask", ctypes.c_ulong)]
-    t = Throttle(1, 0x1 | 0x4, 0)  # execution speed + timer resolution throttling: off
-    k32.SetProcessInformation(proc, 4, ctypes.byref(t), ctypes.sizeof(t))  # ProcessPowerThrottling
-    ctypes.windll.winmm.timeBeginPeriod(1)
-
-
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -151,31 +134,32 @@ def main():
 
     def send_all():
         ff = comp.feedforward({m: cmd[m] for m in vff}, vff) if comp else {}
-        for mid in ids:
-            if mid == GRIPPER:
-                st = bus.state.get(mid)
-                tau = 0.0
-                if st:
-                    target = math.radians(zero[mid] + grip["target"])
-                    limit = grip["limit"]
-                    if grip["teleop_hold"]:  # teleop.py's rule, see GRIP_TORQUE_HOLDING
-                        now_g = time.time()
-                        far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
-                        if abs(st["vel"]) > GRIP_HOLD_VEL or abs(grip["target"] - grip["since_target"]) > GRIP_NEAR_DEG:
-                            grip["since"], grip["since_target"] = now_g, grip["target"]  # moving or new target
-                        stalled = now_g - grip["since"] > GRIP_STALL_S
-                        limit = limit if far and not stalled else min(limit, GRIP_TORQUE_HOLDING)
-                    tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
-                bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
-            else:
-                # velocity feedforward: without it the kd term brakes against every planned motion
-                # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
-                kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
-                if comp and (mid in comp.friction_nm or mid in comp.gravity_scale):
-                    tau = ff[mid]  # fitted model replaces the hand-tuned friction on this joint
+        with bus.send_batch():  # all 7 commands under one hold of the USB lock
+            for mid in ids:
+                if mid == GRIPPER:
+                    st = bus.state.get(mid)
+                    tau = 0.0
+                    if st:
+                        target = math.radians(zero[mid] + grip["target"])
+                        limit = grip["limit"]
+                        if grip["teleop_hold"]:  # teleop.py's rule, see GRIP_TORQUE_HOLDING
+                            now_g = time.time()
+                            far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
+                            if abs(st["vel"]) > GRIP_HOLD_VEL or abs(grip["target"] - grip["since_target"]) > GRIP_NEAR_DEG:
+                                grip["since"], grip["since_target"] = now_g, grip["target"]  # moving or new target
+                            stalled = now_g - grip["since"] > GRIP_STALL_S
+                            limit = limit if far and not stalled else min(limit, GRIP_TORQUE_HOLDING)
+                        tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
+                    bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
                 else:
-                    tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
-                bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
+                    # velocity feedforward: without it the kd term brakes against every planned motion
+                    # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
+                    kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
+                    if comp and (mid in comp.friction_nm or mid in comp.gravity_scale):
+                        tau = ff[mid]  # fitted model replaces the hand-tuned friction on this joint
+                    else:
+                        tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
+                    bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
 
     resting = {"now": False}  # True during the final return to rest: nothing may abort it (see FEEDBACK_GRACE_S)
 

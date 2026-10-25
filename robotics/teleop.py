@@ -16,10 +16,14 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 
 from leader_arm import HERE, LEADER_CAL_FILE, MAPPING, LeaderArm, load_follower_zero
-from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
+from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, boost_process, fine_timer
+# the same joint control as arm_server.py (velocity feedforward, J1 gains + friction, fitted compensation): teleop
+# used bare kp/kd, so kd braked against every motion and the follower lagged, then lurched (2026-10-25)
+from arm_server import FRICTION_FF_NM, FRICTION_FF_VEL, GAIN_OVERRIDE, VEL_FF_MAX, VEL_FF_SMOOTH
 from recorder import Camera, Recorder
 
 try:
@@ -84,6 +88,11 @@ def main():
     ids = list(JOINTS)
     dt = 1.0 / args.hz
     fine_timer()  # 1 ms sleeps on Windows, so --hz is actually reached
+    boost_process()  # high priority, no power throttling: the loop was wandering 45-94 Hz
+    comp = None
+    if (HERE / "compensation.json").exists():
+        from compensation import Compensation
+        comp = Compensation.load(HERE / "compensation.json")
 
     camera = Camera(args.camera, args.width, args.height) if args.record and args.camera >= 0 else None
     recorder = None
@@ -95,27 +104,44 @@ def main():
     grip_stall = {"since": 0.0, "target": 0.0}   # when the jaws last moved / got a new target
     smooth: dict[int, float] = {}                # low-passed leader goal (--smooth-ms)
 
+    vff = {m: 0.0 for m in ids if m != GRIPPER}   # velocity feedforward, rad/s (from how cmd moved)
+    ff_clock = {"t": time.perf_counter(), "prev": {}}
+
     def send_all():
-        for mid in ids:
-            target = math.radians(zero[mid] + cmd[mid])
-            if mid == GRIPPER:
-                st = bus.state.get(mid)
-                tau = 0.0
-                if st:
-                    # Full torque to get the jaws moving and keep them moving; the gentle holding torque only
-                    # once they've arrived, or have been stalled away from the target for GRIP_STALL_S (closed
-                    # on a tube). Holding torque whenever the jaws were still made a deadlock: 1 N.m doesn't
-                    # break the jaws' static friction, so they never started moving and never got full torque.
-                    now_g = time.time()
-                    far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
-                    if abs(st["vel"]) > GRIP_HOLD_VEL or abs(cmd[mid] - grip_stall["target"]) > GRIP_NEAR_DEG:
-                        grip_stall.update(since=now_g, target=cmd[mid])   # moving, or a new target: not stalled
-                    stalled = now_g - grip_stall["since"] > GRIP_STALL_S
-                    limit = GRIP_TORQUE_MOVING if far and not stalled else GRIP_TORQUE_HOLDING
-                    tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
-                bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
-            else:
-                bus.mit(mid, target, JOINTS[mid][1], JOINTS[mid][2])
+        now_p = time.perf_counter()
+        el = now_p - ff_clock["t"]
+        if el > 0:
+            for m in vff:
+                v = math.radians(cmd[m] - ff_clock["prev"].get(m, cmd[m])) / el
+                vff[m] += (max(-VEL_FF_MAX, min(VEL_FF_MAX, v)) - vff[m]) * VEL_FF_SMOOTH
+        ff_clock["t"], ff_clock["prev"] = now_p, dict(cmd)
+        ff = comp.feedforward({m: cmd[m] for m in vff}, vff) if comp else {}
+        with bus.send_batch():  # all 7 commands under one hold of the USB lock
+            for mid in ids:
+                target = math.radians(zero[mid] + cmd[mid])
+                if mid == GRIPPER:
+                    st = bus.state.get(mid)
+                    tau = 0.0
+                    if st:
+                        # Full torque to get the jaws moving and keep them moving; the gentle holding torque only
+                        # once they've arrived, or have been stalled away from the target for GRIP_STALL_S (closed
+                        # on a tube). Holding torque whenever the jaws were still made a deadlock: 1 N.m doesn't
+                        # break the jaws' static friction, so they never started moving and never got full torque.
+                        now_g = time.time()
+                        far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
+                        if abs(st["vel"]) > GRIP_HOLD_VEL or abs(cmd[mid] - grip_stall["target"]) > GRIP_NEAR_DEG:
+                            grip_stall.update(since=now_g, target=cmd[mid])   # moving, or a new target: not stalled
+                        stalled = now_g - grip_stall["since"] > GRIP_STALL_S
+                        limit = GRIP_TORQUE_MOVING if far and not stalled else GRIP_TORQUE_HOLDING
+                        tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
+                    bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
+                else:
+                    kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
+                    if comp and (mid in comp.friction_nm or mid in comp.gravity_scale):
+                        tau = ff[mid]
+                    else:
+                        tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
+                    bus.mit(mid, target, kp, kd, vel=vff[mid], torque=tau)
         bus.drain(0.0)
 
     def check_follower():
@@ -201,13 +227,28 @@ def main():
         last_leader = leader.read_follower_targets()
         last_leader_t = time.time()
 
+        # the leader is read on its own thread: a read is ~4 ms, but a missed reply waits ~110 ms for the serial
+        # timeout, and done inline that froze the whole control loop (the follower jerked)
+        lead = {"q": last_leader, "t": last_leader_t, "ms": [], "run": True}
+
+        def leader_reader():
+            while lead["run"]:
+                t_l = time.perf_counter()
+                try:
+                    q = leader.read_follower_targets()
+                except RuntimeError:
+                    time.sleep(0.002)
+                    continue
+                lead["q"], lead["t"] = q, time.time()
+                lead["ms"].append((time.perf_counter() - t_l) * 1000.0)
+                time.sleep(0.001)
+
+        reader = threading.Thread(target=leader_reader, daemon=True)
+        reader.start()
+
         def leader_goal():
             nonlocal last_leader, last_leader_t
-            try:
-                last_leader = leader.read_follower_targets()
-                last_leader_t = time.time()
-            except RuntimeError:
-                pass
+            last_leader, last_leader_t = lead["q"], lead["t"]
             return last_leader
 
         ease_to(leader_goal, "Easing follower onto leader pose")
@@ -225,10 +266,14 @@ def main():
         t_print = t_state = 0.0
         t_prev = time.perf_counter()
         loops = 0
+        gaps = []          # loop periods, ms: summarised at the end
+        send_ms = []       # time to send the 7 motor commands, ms
+        deadline = time.perf_counter()
         while not stop_requested():
             if args.duration is not None and time.time() - t_start > args.duration:
                 break
             t0 = time.perf_counter()
+            gaps.append((t0 - t_prev) * 1000.0)
             elapsed, t_prev = min(t0 - t_prev, 0.05), t0  # speed cap uses real loop time
             goal = leader_goal()
             if time.time() - last_leader_t > LEADER_TIMEOUT:
@@ -244,7 +289,9 @@ def main():
             for m in ids:
                 step = args.max_speed * elapsed * (6.0 if m == GRIPPER else 1.0)  # gripper travels 6x the leader angle
                 cmd[m] += max(-step, min(step, goal[m] - cmd[m]))
+            t_s = time.perf_counter()
             send_all()
+            send_ms.append((time.perf_counter() - t_s) * 1000.0)
             check_follower()
             loops += 1
             now = time.time()
@@ -264,8 +311,20 @@ def main():
                 g = bus.state.get(GRIPPER)
                 grip = f"grip leader {goal[GRIPPER]:5.1f} jaws {math.degrees(g['pos']) - zero[GRIPPER]:5.1f}" if g else ""
                 print(f"\r{line}  {grip}  max {temps:.0f}C  {rate:5.0f} Hz ", end="", flush=True)
-            time.sleep(max(0.0, dt - (time.perf_counter() - t0)))
+            # sleep to the next fixed deadline (as arm_server.py): a flat dt-minus-work sleep drifted to ~93 Hz
+            deadline += dt
+            wait = deadline - time.perf_counter()
+            if wait > 0:
+                time.sleep(wait)
+            elif wait < -dt:
+                deadline = time.perf_counter()  # fell behind: restart the schedule instead of bursting
         print()
+        if len(gaps) > 10:
+            g, lm = sorted(gaps[1:]), sorted(lead["ms"]) or [0.0]
+            print(f"loop: {1000.0 / g[len(g) // 2]:.0f} Hz typical, period p95 {g[int(0.95 * len(g))]:.1f} ms, "
+                  f"max {g[-1]:.0f} ms, {sum(x > 20 for x in g)} periods over 20 ms; leader read median "
+                  f"{lm[len(lm) // 2]:.1f} ms, max {lm[-1]:.0f} ms; motor send median "
+                  f"{sorted(send_ms)[len(send_ms) // 2]:.1f} ms, max {max(send_ms):.0f} ms")
     except KeyboardInterrupt:
         print()
     except Exception as e:  # leader/follower errors and CAN adapter failures all end the session safely
@@ -309,6 +368,9 @@ def main():
                           + (f" - {recorder.late} frames written late" if recorder.late else ""))
                 except Exception as e:
                     print(f"Recording finalize failed: {e!r}")
+            if "lead" in locals():
+                lead["run"] = False
+                reader.join(timeout=0.5)
             for closer in (bus.close, leader.close) + ((camera.close,) if camera else ()):
                 try:
                     closer()

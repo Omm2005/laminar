@@ -73,6 +73,23 @@ def fine_timer():
             pass
 
 
+
+class _Batch:
+    """Hold the USB lock, flagging the receive thread to step aside while we wait for it."""
+
+    def __init__(self, bus):
+        self.b = bus
+
+    def __enter__(self):
+        self.b._tx_waiting += 1
+        self.b._usb_lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.b._usb_lock.release()
+        self.b._tx_waiting -= 1
+        return False
+
 class RobStrideBus:
     def __init__(self, bitrate=1_000_000):
         self.bus = can.Bus(interface="gs_usb", channel=0, index=0, bitrate=bitrate)
@@ -80,7 +97,10 @@ class RobStrideBus:
         # gs_usb recv() costs ~14 ms when nothing is waiting on Windows, so receive on a background thread.
         # Reads and writes never overlap: concurrent USB transfers coincided with the adapter wedging
         # (USB I/O error, then no TX at all until replugged).
-        self._usb_lock = threading.Lock()
+        # re-entrant, so a whole round of commands can go out under one hold (send_batch), and a sender waiting for
+        # it makes the receive thread step aside: per-frame lock races made a 7-motor round take up to ~48 ms
+        self._usb_lock = threading.RLock()
+        self._tx_waiting = 0
         self._rx = queue.Queue()
         self.rx_errors, self.last_rx_error = 0, None  # USB read errors survived by the receive thread
         self._running = True
@@ -89,6 +109,9 @@ class RobStrideBus:
 
     def _rx_loop(self):
         while self._running:
+            if self._tx_waiting:
+                time.sleep(0.0002)
+                continue
             try:
                 with self._usb_lock:
                     msg = self.bus.recv(0.001)
@@ -117,9 +140,13 @@ class RobStrideBus:
         self._thread.join(timeout=1.0)
         self.bus.shutdown()
 
+    def send_batch(self):
+        """with bus.send_batch(): ... sends every command inside under one hold of the USB lock."""
+        return _Batch(self)
+
     def _send(self, comm_type, data2, motor_id, data=b"\x00" * 8):
         arb = (comm_type << 24) | ((data2 & 0xFFFF) << 8) | motor_id
-        with self._usb_lock:
+        with _Batch(self):
             self.bus.send(can.Message(arbitration_id=arb, data=data, is_extended_id=True))
 
     def _handle(self, msg):
@@ -181,3 +208,20 @@ class RobStrideBus:
         data = struct.pack(">HHHH", _u16(pos, P_MIN, P_MAX), _u16(vel, -vmax, vmax),
                            _u16(kp, 0, kpmax), _u16(kd, 0, kdmax))
         self._send(T_MIT, _u16(torque, -tmax, tmax), motor_id, data)
+
+
+def boost_process() -> None:
+    """Windows: high priority and no power throttling (EcoQoS) for this process only, so the 100 Hz loop is not
+    parked for hundreds of ms while the laptop saves power."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    proc = k32.GetCurrentProcess()
+    k32.SetPriorityClass(proc, 0x80)  # HIGH_PRIORITY_CLASS
+
+    class Throttle(ctypes.Structure):
+        _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong), ("StateMask", ctypes.c_ulong)]
+    t = Throttle(1, 0x1 | 0x4, 0)  # execution speed + timer resolution throttling: off
+    k32.SetProcessInformation(proc, 4, ctypes.byref(t), ctypes.sizeof(t))  # ProcessPowerThrottling
+    ctypes.windll.winmm.timeBeginPeriod(1)
