@@ -168,14 +168,14 @@ class ArmClient:
         return {"result": "dry run"} if self.dry_run else self.wait_idle()
 
     def start_table_tilt(self, table: list[dict[int, float]], step_deg: float, max_rate_deg_s: float = 30.0,
-                         joint_rate_deg_s: float = 45.0, timeout_s: float = 0.5, tip_hold: bool = True) -> None:
+                         joint_rate_deg_s: float = 45.0, timeout_s: float = 0.5) -> None:
         """Hand the pour tilt to arm_server: J1-J6 per step_deg of tilt; then set_tilt(deg) streams the angle and
         end_tilt_stream() tilts back and ends it."""
         self._tilt_seq = 0
         self._write_atomic(TILT_FILE, {"seq": -1, "deg": 0.0, "done": False})
         self._send({"op": "table_tilt", "table": [[round(r[j], 4) for j in range(1, 7)] for r in table],
                     "step_deg": step_deg, "max_rate_deg_s": max_rate_deg_s, "joint_rate_deg_s": joint_rate_deg_s,
-                    "timeout_s": timeout_s, "tip_hold": tip_hold}, wait=False)
+                    "timeout_s": timeout_s}, wait=False)
 
     def start_pose_stream(self, max_rate_deg_s: float = 60.0, timeout_s: float = 0.5) -> dict[int, float]:
         """Hand J1-J6 to set_pose(). Returns the start pose (degrees): where the arm goes back when the stream ends."""
@@ -198,12 +198,15 @@ class ArmClient:
         self.set_pose({}, done=True)
         return {"result": "dry run"} if self.dry_run else self.wait_idle()
 
-    def run(self, path: Path, mode: str = "path") -> dict:
+    def run(self, path: Path, mode: str = "path", hold: float = 1.0) -> dict:
         """Execute a planned Path on the arm.
 
         Inputs
             path : a Path from motion.plan_lift / plan_lower / plan_travel
             mode : "path" (default, continuous) or "moves" (fallback, slows at every 10 mm chunk)
+            hold : arm_server's sag hold: 1 (default) = the real arm follows the planned pose (planned paths are
+                   true positions); 0 = as commanded, like a teleop recording (use it for the last move back into
+                   a pose that came from one, e.g. lowering into a vial's slot)
         Output
             the final arm_status.json dict
         Safety
@@ -220,7 +223,7 @@ class ArmClient:
         if mode == "path":
             pts = [{str(j): round(q[j], 3) for j in range(1, 7)} for q in path.joints]
             hz = 1.0 / (path.times_s[1] - path.times_s[0]) if len(path.times_s) > 1 else 50.0
-            return self._send({"op": "path", "points": pts, "hz": hz})
+            return self._send({"op": "path", "points": pts, "hz": hz, "hold": hold})
 
         if mode != "moves":
             raise ValueError("mode must be 'moves' or 'path'")
@@ -242,6 +245,6 @@ class ArmClient:
             dt = max(0.5, path.times_s[k] - t_prev)
             speed = max(1.0, 1.5 * biggest / dt)
             result = self._send({"op": "move", "joints": {str(j): round(q[j], 3) for j in range(1, 7)},
-                                 "speed": round(speed, 2)})
+                                 "speed": round(speed, 2), "hold": hold})
             last_sent, last_p, t_prev = q, p, path.times_s[k]
         return result

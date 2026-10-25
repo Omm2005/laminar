@@ -411,8 +411,11 @@ def main(argv=None) -> None:
             _phase("return")
             back = M.plan_line(client.current_joints(), p_hold, None, speed_mm_s=10.0, label="undo the sag trim")
             print("  " + str(client.run(back).get("result")))
-            for mv in reversed(done):
-                print("  " + str(client.run(reverse_path(mv)).get("result")))
+            for k, mv in enumerate(reversed(done)):
+                # the last one lowers into the vial's grasp pose, a teleop COMMAND: arrive as commanded (hold 0, the
+                # sag blends back in over the first second, high above the rack) so the reversed grab fits it
+                last_one = k == len(done) - 1
+                print("  " + str(client.run(reverse_path(mv), hold=0.0 if last_one else 1.0).get("result")))
             _phase("release")
             grab.play(vial, run=True, reverse=True)
             _phase("done")

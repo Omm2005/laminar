@@ -79,10 +79,17 @@ GRASP_SQUEEZE_DEG = 4.0  # hold target this far inside the contact point
 EMPTY_GRIP_DEG = 12.0    # closing past this means nothing was in the jaws
 TEMP_LIMIT_C = 80.0
 FEEDBACK_TIMEOUT = 0.25
-TIP_HOLD_EVERY = 5            # table_tilt tip hold: correct every 5 ticks (20 Hz)
-TIP_HOLD_TAU_S = 0.4          # ... closing the measured tip error with this time constant
-TIP_HOLD_MAX_MM = 60.0        # ... never shifting the commanded tip further than this (sag seen: 30-40 mm)
-TIP_HOLD_MAX_JOINT_DEG = 15.0  # ... nor any joint further than this from the table
+# Sag hold (every op): a loaded joint sits a nearly constant amount short of its command (gravity against finite
+# stiffness), and that amount changes with the pose: the tip ended 20-40 mm off planned poses and wandered ~12 mm
+# during the pour tilt. Each arm joint is commanded ahead by its own measured tracking error (encoders, low-passed),
+# times `hold` (0..1, per op, blended over HOLD_BLEND_S): hold 1 = the real arm follows the planned joints (planned
+# paths, hand-taught poses, the pour); hold 0 = commands replayed as recorded (teleop grabs: they were recorded
+# as commands, sag included, so they already reproduce what the operator did). `command` in arm_status.json stays
+# the planned pose, so every planner keeps working in true positions.
+SAG_GAIN = 0.9                # < 1: a blocked joint can't run its correction away (it saturates at SAG_MAX_DEG)
+SAG_TAU_S = 0.3               # low-pass on the measured tracking error
+HOLD_BLEND_S = 1.0            # hold changes 0 <-> 1 over this long
+SAG_MAX_DEG = {1: 3.0, 2: 8.0, 3: 8.0, 4: 6.0, 5: 6.0, 6: 6.0}   # per joint cap on the correction
 REST_TOL_DEG = 10.0   # a joint further than this from 0 is not at rest
 STARTUP_FEEDBACK_S = 1.0   # right after enabling, a motor's first reply can be late: no lost-feedback stop yet
 # Lost feedback never drops the arm: hold the commanded pose with torque for FEEDBACK_GRACE_S waiting for it to come
@@ -138,6 +145,25 @@ def main():
     def rel(mid):
         return math.degrees(bus.state[mid]["pos"]) - zero[mid]
 
+    sag = {"d": {m: 0.0 for m in ids if m != GRIPPER}, "w": 0.0, "target": 0.0, "sent": {}}
+
+    def sag_update():
+        """Track each joint's tracking error (what was sent minus where it is) and blend hold towards its target."""
+        step_w = dt / HOLD_BLEND_S
+        sag["w"] += max(-step_w, min(step_w, sag["target"] - sag["w"]))
+        if not enabled or not feedback_fresh():
+            return
+        a = min(1.0, dt / SAG_TAU_S)
+        for m in sag["d"]:
+            sag["d"][m] += (sag["sent"].get(m, cmd[m]) - rel(m) - sag["d"][m]) * a
+
+    def target_of(m):
+        """What joint m is actually sent: the planned command plus hold x its capped sag correction."""
+        if m not in sag["d"] or sag["w"] <= 0.0:
+            return cmd[m]
+        cap = SAG_MAX_DEG.get(m, 5.0)
+        return clamp(m, cmd[m] + sag["w"] * max(-cap, min(cap, SAG_GAIN * sag["d"][m])))
+
     def send_all():
         ff = comp.feedforward({m: cmd[m] for m in vff}, vff) if comp else {}
         with bus.send_batch():  # all 7 commands under one hold of the USB lock
@@ -165,7 +191,8 @@ def main():
                         tau = ff[mid]  # fitted model replaces the hand-tuned friction on this joint
                     else:
                         tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
-                    bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
+                    sag["sent"][mid] = target_of(mid)
+                    bus.mit(mid, math.radians(zero[mid] + sag["sent"][mid]), kp, kd, vel=vff[mid], torque=tau)
 
     resting = {"now": False}  # True during the final return to rest: nothing may abort it (see FEEDBACK_GRACE_S)
 
@@ -220,6 +247,8 @@ def main():
             "state": {f"J{m}": round(rel(m), 1) for m in ids if m in bus.state},
             "torque": {f"J{m}": round(bus.state[m]["torque"], 2) for m in ids if m in bus.state},
             "loop_hz": clock["hz"],
+            "sag_hold": round(sag["w"], 2),
+            "sag_corr": {f"J{m}": round(target_of(m) - cmd[m], 2) for m in sag["d"] if m in cmd},
             "max_temp_c": max((s["temp"] for s in bus.state.values()), default=None),
             "can_rx_errors": getattr(bus, "rx_errors", None),  # USB read errors the CAN receive thread survived
             "gripper": {"target": round(grip["target"], 1), "torque_limit": grip["limit"],
@@ -249,6 +278,7 @@ def main():
                 v = max(-VEL_FF_MAX, min(VEL_FF_MAX, v))
                 vff[m] += (v - vff[m]) * VEL_FF_SMOOTH
         clock["prev"], clock["t"] = dict(cmd), now
+        sag_update()
         send_all()
         check()
         arm6 = range(1, 7)
@@ -378,7 +408,7 @@ def main():
             vel[m] += max(-dv, min(dv, want - vel[m]))
             cmd[m] = clamp(m, cmd[m] + vel[m] * dt)
 
-    def table_tilt(table, step_deg, max_rate, joint_rate, timeout_s, tip_hold=True):
+    def table_tilt(table, step_deg, max_rate, joint_rate, timeout_s):
         """The all-joint pour tilt: joints = table interpolated at a smoothly tracked tilt angle (see the op above)."""
         arm = [m for m in ids if m != GRIPPER]
         rows = [{m: float(r[m - 1]) for m in arm} for r in table]
@@ -397,42 +427,25 @@ def main():
         tilt, v, target = 0.0, 0.0, 0.0
         last_seq, last_t = None, time.time()
         ended, t_status = "done", 0.0
-        # Tip hold: the table keeps the COMMANDED tip still, but the arm sags under gravity by a pose-dependent
-        # amount, so the real fingertips wandered ~12 mm (a whole channel) during the tilt (A2b 07:08). Lock the
-        # MEASURED tip (encoders) where it was when the tilt started: every TIP_HOLD_EVERY ticks compare, move the
-        # commanded tip the other way (integral action, time constant TIP_HOLD_TAU_S), and re-solve all six joints
-        # for it at the table's orientation. The result is kept as a joint offset added to the table.
+        # the tip is held by the general sag hold (hold 1 for this op, set by the dispatcher); here it is only
+        # measured: how far the real (encoder) tip strays from where it was when the tilt started
         import motion as M
         p_hold = M.fk_mm({m: rel(m) for m in arm})[0]
-        shift = np.zeros(3)                      # mm added to the commanded tip
-        corr = {m: 0.0 for m in arm}             # joint offset (deg) that realises the shift
         k_tick = 0
         hold_err = []
 
         def step(goal):
-            nonlocal tilt, v, shift, corr, k_tick
+            nonlocal tilt, v, k_tick
             i = min(int(tilt / step_deg), n - 1)
             cap = min(max_rate, joint_rate / max(gain[i], 1e-3))   # no joint faster than joint_rate
             want = max(-cap, min(cap, (goal - tilt) / STREAM_TAU_S))
             dv = STREAM_ACC_DEG_S2 * dt
             v += max(-dv, min(dv, want - v))
             tilt = max(0.0, min(n * step_deg, tilt + v * dt))
-            base = at(tilt)
+            cmd.update(at(tilt))
             k_tick += 1
-            if tip_hold and k_tick % TIP_HOLD_EVERY == 0 and feedback_fresh():
-                err = p_hold - M.fk_mm({m: rel(m) for m in arm})[0]
-                hold_err.append(float(np.linalg.norm(err)))
-                shift = shift + err * (TIP_HOLD_EVERY * dt / TIP_HOLD_TAU_S)
-                n_s = float(np.linalg.norm(shift))
-                if n_s > TIP_HOLD_MAX_MM:
-                    shift = shift * (TIP_HOLD_MAX_MM / n_s)
-                p_b, R_b = M.fk_mm(base)
-                q, pe, ae = M.ik({m: base[m] + corr[m] for m in arm}, p_b + shift, R_b, iters=30)
-                q = dict(q)
-                c_new = {m: q[m] - base[m] for m in arm}
-                if pe <= 1.0 and ae <= 0.5 and max(abs(x) for x in c_new.values()) < TIP_HOLD_MAX_JOINT_DEG:
-                    corr = c_new
-            cmd.update({m: clamp(m, base[m] + corr[m]) for m in arm})
+            if k_tick % 5 == 0 and feedback_fresh():
+                hold_err.append(float(np.linalg.norm(p_hold - M.fk_mm({m: rel(m) for m in arm})[0])))
             tick()
 
         while True:
@@ -454,10 +467,9 @@ def main():
                 write_status(busy=True, doing="table_tilt", tilt_deg=round(tilt, 1))
         while tilt > 0.05 or abs(v) > 0.5:      # back to 0 deg, same smoothing
             step(0.0)
-        if max(abs(corr[m]) for m in arm) < 1.5:
-            cmd.update(rows[0])
-        held = (f", tip held within {max(hold_err):.1f} mm (median {sorted(hold_err)[len(hold_err) // 2]:.1f}), "
-                f"correction {float(np.linalg.norm(shift)):.1f} mm at the end" if hold_err else "")
+        cmd.update(rows[0])
+        held = (f", tip held within {max(hold_err):.1f} mm (median {sorted(hold_err)[len(hold_err) // 2]:.1f})"
+                if hold_err else "")
         return f"table_tilt ended ({ended}), back upright{held}"
 
     def pose_stream(max_rate, timeout_s):
@@ -621,6 +633,12 @@ def main():
                 last.update(id=done_id, op=op, result="running")
                 print(f"cmd {done_id}: {c}", flush=True)
                 extra = {}
+                # sag hold for this op (see SAG_GAIN): the pour streams hold the tip; "path" defaults to as-recorded
+                # (arm_client.run sends hold 1 for planned paths); move and the gripper keep the current hold
+                h = c.get("hold", {"table_tilt": 1.0, "pose_stream": 1.0, "tilt_stream": 1.0, "path": 0.0,
+                                   "rest": 0.0, "stop": 0.0}.get(op))
+                if h is not None:
+                    sag["target"] = max(0.0, min(1.0, float(h)))
                 if op == "move":
                     goal = {int(k): float(v) for k, v in c.get("joints", {}).items() if int(k) != GRIPPER}
                     last["result"] = move(goal, float(c.get("speed", 15.0)), "move")
@@ -641,8 +659,7 @@ def main():
                 elif op == "table_tilt":
                     last["result"] = table_tilt(c["table"], float(c.get("step_deg", 1.0)),
                                                 float(c.get("max_rate_deg_s", 30.0)),
-                                                float(c.get("joint_rate_deg_s", 45.0)), float(c.get("timeout_s", 0.5)),
-                                                bool(c.get("tip_hold", True)))
+                                                float(c.get("joint_rate_deg_s", 45.0)), float(c.get("timeout_s", 0.5)))
                 elif op == "pose_stream":
                     last["result"] = pose_stream(float(c.get("max_rate_deg_s", 60.0)), float(c.get("timeout_s", 0.5)))
                 elif op in ("rest", "stop"):
@@ -681,6 +698,7 @@ def main():
                     if not feedback_fresh():
                         print(f"still no feedback: easing to rest on commands alone at {BLIND_REST_SPEED:g} deg/s",
                               flush=True)
+                sag["target"] = 0.0   # rest is a commanded pose (folded, on its stops): no sag hold
                 move(dict.fromkeys(cmd, 0.0), 15.0 if feedback_fresh() else BLIND_REST_SPEED, "return to rest")
                 hold(0.5)
                 # check the arm really is at rest before disabling: on 2026-10-25 every motor had lost power, the

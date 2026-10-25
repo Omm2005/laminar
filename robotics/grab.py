@@ -86,7 +86,7 @@ def play(name: str, run: bool, reverse: bool = False) -> None:
     try:
         client.current_joints()
         first = pts[0]
-        client._send({"op": "move", "joints": {str(j): first[j] for j in range(1, 7)}, "speed": 15.0})
+        client._send({"op": "move", "joints": {str(j): first[j] for j in range(1, 7)}, "speed": 15.0, "hold": 0.0})
         client._send({"op": "gripper", "target": first[7], "speed": 30.0})
         st = client._send({"op": "path", "points": [{str(j): round(p[j], 3) for j in range(1, 8)} for p in pts],
                            "hz": hz})

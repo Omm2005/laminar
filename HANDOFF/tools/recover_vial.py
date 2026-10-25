@@ -19,8 +19,8 @@ moves.append(M.plan_line(moves[-1].final_joints, [pa[0], pa[1], z_carry], Ra, sp
 moves.append(M.plan_line(moves[-1].final_joints, pa, Ra, speed_mm_s=M.DEFAULT_LOWER_SPEED, label="lower into the slot"))
 for m in moves:
     print(m.summary())
-for m in moves:
-    print("  " + str(c.run(m).get("result")))
+for k, m in enumerate(moves):   # the lower into the slot arrives as commanded (the grasp pose is a teleop command)
+    print("  " + str(c.run(m, hold=0.0 if k == len(moves) - 1 else 1.0).get("result")))
 end = moves[-1].final_joints
 off = max(abs(end[j] - qa[j]) for j in range(1, 7))
 if off > 1.0:
