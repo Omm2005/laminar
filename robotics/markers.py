@@ -675,15 +675,21 @@ def cmd_visit(a) -> None:
         raise SystemExit(f"NOT MOVING: {e}") from None
     print("gripper pointing straight down" if tilt == 0 else
           f"gripper pointing down, tip leaning {tilt:g} deg outward (straight down is out of reach)")
-    for cont, moves in plans:
+    for n, (cont, moves) in enumerate(plans):
         print(f"\ncontainer {cont}")
+        p_goal, _ = M.fk_mm(moves[-1].final_joints)  # the hover point itself, whatever the arm does to reach it
+        if client and n:  # the sag correction moved the arm off the plan: plan this container from where it is
+            try:
+                moves = _plan_visit(client.current_joints(), {cont: pose["containers"][cont]}, calib["table_z_mm"],
+                                    workspace, tilt, a.hover)[0][1]
+            except M.PlanError as e:
+                raise SystemExit(f"STOPPED before container {cont} (arm holds where it is): {e}") from None
         for p in moves:
             print("  " + p.summary())
             if client:
                 input("  Enter to move ")
                 print("  " + str(client.run(p).get("result")))
         if client:  # at the hover point: make the MEASURED tip land there, not just the command
-            p_goal, _ = M.fk_mm(moves[-1].final_joints)
             settle_on(client, p_goal)
     print("\ndone" + (": arm_server is holding above the last container (python arm_cmd.py rest to rest)"
                       if client else " (print only: add --run to move)"))
