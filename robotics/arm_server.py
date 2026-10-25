@@ -19,7 +19,7 @@ Command file (write atomically; a new "id" triggers execution). Angles are degre
         # joints by interpolating the table, so all six joints move smoothly together (streaming the joints at 25 Hz
         # shook the arm at 25 Hz). Watchdog or done: back to 0 deg (= table row 0)
   {"id": 6, "op": "rest"}                                               # ease to zero pose, disable, exit
-Status is written to arm_status.json after every command and ~5x per second while busy.
+Status is written to arm_status.json after every command and ~10x per second while busy.
 Creating a file named STOP also returns to rest and exits.
 
 Usage:  python arm_server.py [--hold-grip]   (--hold-grip: the gripper is holding an object at startup;
@@ -104,6 +104,7 @@ STARTUP_FEEDBACK_S = 1.0   # right after enabling, a motor's first reply can be 
 FEEDBACK_GRACE_S = 2.0
 BLIND_REST_SPEED = 8.0   # deg/s for the return to rest without feedback (15 with it)
 IDLE_TIMEOUT_S = 15 * 60
+STATUS_BUSY_S = 0.1         # status (joints) every 0.1 s while moving: the website's 3D arm and publish.py follow it
 # follower motor-frame soft limits (degrees from zero), same as teleop
 LIMITS = {mid: lim for (mid, _scale, lim) in MAPPING.values()}
 
@@ -335,7 +336,7 @@ def main():
             for m in frm:
                 cmd[m] = frm[m] + (goal[m] - frm[m]) * smoothstep(s)
             tick()
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, progress=round(s, 2), doing=label)
             if s >= 1.0:
@@ -380,7 +381,7 @@ def main():
             if grips:
                 grip["target"] = grips[i] if len(grips) == 1 else grips[i] + (grips[i + 1] - grips[i]) * f
             tick()
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, progress=round(x / max(1, len(pts) - 1), 2), doing="path")
             if x >= len(pts) - 1:
@@ -412,7 +413,7 @@ def main():
                 break
             follow({joint: clamp(joint, base + target)}, vel, max_rate)
             tick()
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, doing="tilt_stream", tilt_deg=round(cmd[joint] - base, 1))
         while abs(cmd[joint] - base) > 0.05 or abs(vel[joint]) > 0.5:  # back to upright, same smooth tracking
@@ -486,7 +487,7 @@ def main():
                 ended = f"watchdog: no tilt update for {timeout_s:.2f}s"
                 break
             step(target)
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, doing="table_tilt", tilt_deg=round(tilt, 1))
         while tilt > 0.05 or abs(v) > 0.5:      # back to 0 deg, same smoothing
@@ -522,7 +523,7 @@ def main():
                 break
             follow(goal, vel, max_rate)
             tick()
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, doing="pose_stream")
         while max(abs(cmd[m] - base[m]) for m in arm) > 0.05 or max(abs(vel[m]) for m in arm) > 0.5:
@@ -559,7 +560,7 @@ def main():
             tick()
             pos = rel(GRIPPER)
             vel = abs(bus.state[GRIPPER]["vel"])
-            if time.time() - t_status > 0.2:
+            if time.time() - t_status > STATUS_BUSY_S:
                 t_status = time.time()
                 write_status(busy=True, doing="grasp")
             if pos < EMPTY_GRIP_DEG:

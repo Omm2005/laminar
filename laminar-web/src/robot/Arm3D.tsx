@@ -13,7 +13,9 @@
  *   - thin trail of the gripper tip over the last ~2 s
  *
  * Joints: ring buffer of the last 20 telemetry samples; render 150 ms behind newest for smooth
- * 60 fps motion. The whole Canvas subtree is memoised so a new telemetry row doesn't rerender
+ * 60 fps motion. Measured joints (the real arm, `measured`) are stamped by the bench laptop's clock and arrive in
+ * batches: they play on the arrival timeline instead (see MEASURED_LAG_MS), so a laptop clock that is off by seconds
+ * neither delays the arm by that much nor makes it jump. The whole Canvas subtree is memoised so a new telemetry row doesn't rerender
  * the rest of the Live/ROBOT page.
  */
 import { Suspense, memo, useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +27,10 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const BASE_URL = "/robot/";
 const INTERP_LAG_MS = 150;
+/** Measured joints: render this far behind the newest sample, on the arrival timeline. The arm writes its pose about
+ *  every 100 ms while moving and the link batches them, so there are always two samples to interpolate between. */
+const MEASURED_LAG_MS = 250;
+const SKEW_WINDOW_MS = 10_000;
 const TRAIL_WINDOW_S = 2.0;
 const TRAIL_HZ = 60;
 const TRAIL_MAX = TRAIL_WINDOW_S * TRAIL_HZ;
@@ -240,6 +246,8 @@ type ArmProps = {
   vialInGripper?: boolean;
   /** Vial contents label; used only to pick a liquid colour. */
   vialColor?: string;
+  /** Samples are measured by the real arm (bench laptop clock), not simulated on the server's timeline. */
+  measured?: boolean;
 };
 
 const PRESETS: Record<string, { pos: [number, number, number]; target: [number, number, number] }> = {
@@ -458,9 +466,10 @@ function FpsMonitor({ onFps }: { onFps: (fps: number) => void }) {
   return null;
 }
 
-function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset, onFps,
+function RobotScene({ samplesRef, shiftRef, status, gripperDeg, pourChannel, cameraPreset, onFps,
                       vision, vialInGripper, vialColor }: {
   samplesRef: React.MutableRefObject<Telem[]>;
+  shiftRef: React.MutableRefObject<number>;
   status: string;
   gripperDeg: number;
   pourChannel: number | null | undefined;
@@ -495,7 +504,7 @@ function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset,
 
   useFrame(() => {
     if (!robot) return;
-    const deg = interpAt(samplesRef.current, Date.now() - INTERP_LAG_MS);
+    const deg = interpAt(samplesRef.current, Date.now() - shiftRef.current);
     robot.setFromTelemetry(deg, gripperDeg);
   });
 
@@ -538,7 +547,19 @@ function RobotScene({ samplesRef, status, gripperDeg, pourChannel, cameraPreset,
 
 const Arm3D = memo(function Arm3D(props: ArmProps) {
   const samplesRef = useRef<Telem[]>([]);
-  useEffect(() => { samplesRef.current = props.samples; }, [props.samples]);
+  // How far behind "now" to draw: simulated samples are on the server's clock (INTERP_LAG_MS behind). Measured ones:
+  // the smallest (arrival - sample time) of the last few seconds is the laptop's clock offset plus the fastest link
+  // time; drawing that plus MEASURED_LAG_MS behind now keeps the arm just behind the newest sample that arrived.
+  const shiftRef = useRef(INTERP_LAG_MS);
+  const arrivals = useRef<{ at: number; d: number }[]>([]);
+  useEffect(() => {
+    samplesRef.current = props.samples;
+    const newest = props.samples.at(-1);
+    if (!props.measured || !newest) { arrivals.current = []; shiftRef.current = INTERP_LAG_MS; return; }
+    const now = Date.now();
+    arrivals.current = [...arrivals.current.filter((x) => now - x.at < SKEW_WINDOW_MS), { at: now, d: now - newest.t }];
+    shiftRef.current = Math.min(...arrivals.current.map((x) => x.d)) + MEASURED_LAG_MS;
+  }, [props.samples, props.measured]);
   const [fps, setFps] = useState(60);
   const highQuality = fps >= 45;
   return (
@@ -552,6 +573,7 @@ const Arm3D = memo(function Arm3D(props: ArmProps) {
       <Suspense fallback={null}>
         <RobotScene
           samplesRef={samplesRef}
+          shiftRef={shiftRef}
           status={props.status}
           gripperDeg={props.gripperDeg ?? 0}
           pourChannel={props.pourChannel ?? null}

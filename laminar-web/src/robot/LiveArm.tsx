@@ -11,7 +11,9 @@ export default function LiveArm({ height = 380, preset = "wide" }: { height?: nu
   const samples = useQuery(api.robot.recent);
   const bench = useQuery(api.bench.state);
   const now = Date.now();
-  const latest = samples?.filter((s) => s.t <= now).at(-1) ?? samples?.[0];
+  // measured joints (bench laptop clock): the newest one; simulated moves are stamped ahead: the newest that started
+  const newest = samples?.at(-1);
+  const latest = newest?.source === "bench" ? newest : samples?.filter((s) => s.t <= now).at(-1) ?? samples?.[0];
   const move = latest?.move ?? "";
   const run = bench?.running;
   const status = !run ? "idle" : move.startsWith("pour") ? "pouring" : "running";
@@ -31,6 +33,7 @@ export default function LiveArm({ height = 380, preset = "wide" }: { height?: nu
     <div style={{ height, borderRadius: 6, overflow: "hidden", position: "relative", background: "#0f1618" }}>
       <Arm3D
         samples={(samples ?? []).map((s) => ({ t: s.t, joints: s.joints }))}
+        measured={latest?.source === "bench"}
         status={status}
         gripperDeg={latest?.gripperDeg ?? 70}
         pourChannel={pourWell ? WELL_CHANNEL[+pourWell] : null}
