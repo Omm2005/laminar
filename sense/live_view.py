@@ -70,7 +70,7 @@ SIDE_LATEST = HERE.parent / "robotics" / "side_latest.jpg"   # newest side frame
 
 
 class LatestJpeg:
-    """Keeps `path` holding the newest frame (full, uncropped), at most `hz` times a second, for readers like
+    """Keeps `path` holding the newest frame (the annotated tray view), at most `hz` times a second, for readers like
     robotics/publish.py. offer() never blocks the camera's loop: the write happens on its own thread, and a frame
     offered while the last one is still being written is just skipped. Atomic: .tmp, then os.replace."""
 
@@ -550,8 +550,6 @@ def main():
             now = time.time()
             fps = 0.9 * fps + 0.1 / max(now - t_prev, 1e-3)
             t_prev = now
-            if live:
-                side_latest.offer(frame)                          # for the website (publish.py)
             if ts != last_ts or not a.save:
                 view = draw(frame, tracker, names, start_ml, a.capacity_ml, fps, targets, state)
             if ts != stats_ts:                                      # stats once per new camera/video frame
@@ -573,6 +571,8 @@ def main():
                 else:
                     writer.write(view)
                 last_ts = ts
+            if live:
+                side_latest.offer(view)                           # the website shows this same view
             cv2.imshow("live levels  (q quit, b redraw boxes, c clear warnings)", view)
             key = cv2.waitKey(30) & 0xFF
             if key == ord("q"):

@@ -6,17 +6,19 @@ bench software already writes and posts them to Convex:
     robotics/arm_status.json   arm_server.py                      -> POST /bench/telemetry (every new status)
     robotics/wrist_latest.jpg  wrist_stream.py, 10 fps            -> POST /bench/frame?cam=wrist (every new frame)
     robotics/side_latest.jpg   the side camera's owner, 15 fps    -> POST /bench/frame?cam=side  (every new frame)
+                               (the owner's annotated window: cropped to the tray, level boxes and readings)
 
 The side camera is owned by whatever process reads the levels (pour_episode.py's Watch, or sense/live_view.py);
-both write their newest full frame to robotics/side_latest.jpg (live_view.LatestJpeg). Do not open the camera a
-second time from here.
+both write their annotated tray view (what their window shows) to robotics/side_latest.jpg
+(live_view.LatestJpeg). Do not open the camera a second time from here.
 
 Why it is fast: each post takes ~0.35 s round trip on a kept-alive HTTPS connection (a new connection per post,
 as urllib does, costs ~1 s), so each camera has several workers on their own kept-alive connections, each taking
 the NEWEST frame not yet sent (frames are never queued up: a stale frame is skipped, not sent late). Joint samples
 are read at 20 Hz and everything gathered so far goes in the next post.
 
-Frames are downscaled to --width px wide JPEG (default 640, quality 70, ~45 kB). A failed post is skipped and
+Frames are downscaled to --width px wide JPEG (default 640, quality 70, ~45 kB); the side view to --side-width
+(default 1280: it is a wide strip whose small labels must stay readable). A failed post is skipped and
 counted; nothing here can slow the arm or the pour.
 
     BENCH_TOKEN in the environment or the repo's .env (never in git; Convex dashboard -> Settings ->
@@ -208,6 +210,7 @@ def main() -> int:
     ap.add_argument("--site", default=SITE)
     ap.add_argument("--workers", type=int, default=4, help="parallel uploads per camera")
     ap.add_argument("--width", type=int, default=640, help="frames are sent at most this wide")
+    ap.add_argument("--side-width", type=int, default=1280, help="the side view is sent at most this wide")
     ap.add_argument("--no-joints", action="store_true"); ap.add_argument("--no-side", action="store_true"); ap.add_argument("--no-wrist", action="store_true")
     a = ap.parse_args()
     token = env_token(here)
@@ -223,7 +226,7 @@ def main() -> int:
     for cam in ("wrist", "side"):
         if not getattr(a, f"no_{cam}"):
             jobs.append((cam, lambda *x, _c=cam, **k: camera_loop(_c, *x, **k), root / f"{cam}_latest.jpg",
-                         {"workers": a.workers, "width": a.width}))
+                         {"workers": a.workers, "width": a.side_width if cam == "side" else a.width}))
     for name, fn, path, kw in jobs:
         counters[name] = Counter()
         threading.Thread(target=fn, args=(path, a.site, token, stop, counters[name]), kwargs=kw, daemon=True,

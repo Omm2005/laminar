@@ -147,7 +147,6 @@ class Watch:
             if frame is None:
                 time.sleep(0.05)
                 continue
-            side_latest.offer(frame)        # full frame for the website (publish.py), never blocks
             img = frame.copy()
             for name in self.names:
                 x, y, w, h = (int(v) for v in self.tracker.columns[name].roi)
@@ -166,6 +165,7 @@ class Watch:
                 t_save = time.time()
                 cv2.imwrite(str(self.out / "side" / f"{n:04d}_{self.phase.replace(' ', '_')}.jpg"), img)
                 n += 1
+            side_latest.offer(img)          # the website shows this same view (publish.py), never blocks
             cv2.imshow("side camera levels", img)
             cv2.waitKey(1)
             time.sleep(0.05)
