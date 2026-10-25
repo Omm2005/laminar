@@ -57,13 +57,19 @@ def write_motion(name: str, label: str, source: str, hz: float, pts: list[dict[i
     return path
 
 
-def play(name: str, run: bool, reverse: bool = False) -> None:
+def play(name: str, run: bool, reverse: bool = False, smooth: bool = False) -> None:
     """Replay a saved motion through arm_server.py: move to its start (or end, for --reverse), set the gripper,
-    then the whole path continuously. Without run: print only."""
+    then the whole path continuously. smooth: filter out the teleop tremor first (smooth_path.py). Without
+    run: print only."""
     m = load(name)
-    pts = m["points"][::-1] if reverse else m["points"]
-    secs = (len(pts) - 1) / m["hz"]
-    print(f"{name}: {m['label']} | {len(pts)} points, {secs:.1f} s{' (reversed)' if reverse else ''}")
+    pts, hz = m["points"], m["hz"]
+    if smooth:
+        from smooth_path import smooth as smooth_points
+        pts, hz = smooth_points(pts, hz)
+    pts = pts[::-1] if reverse else pts
+    secs = (len(pts) - 1) / hz
+    print(f"{name}: {m['label']} | {len(pts)} points, {secs:.1f} s{' (reversed)' if reverse else ''}"
+          f"{' (smoothed)' if smooth else ''}")
     if not run:
         print("print only: add --run (arm_server.py must be running)")
         return
@@ -75,13 +81,13 @@ def play(name: str, run: bool, reverse: bool = False) -> None:
         client._send({"op": "move", "joints": {str(j): first[j] for j in range(1, 7)}, "speed": 15.0})
         client._send({"op": "gripper", "target": first[7], "speed": 30.0})
         st = client._send({"op": "path", "points": [{str(j): round(p[j], 3) for j in range(1, 8)} for p in pts],
-                           "hz": m["hz"]})
+                           "hz": hz})
         print("  " + str(st.get("result")))
     except (RuntimeError, TimeoutError) as e:
         sys.exit(f"STOPPED (arm is holding where it is): {e}")
 
 
-def transfer(name: str, to: str, run: bool, back: bool = True) -> None:
+def transfer(name: str, to: str, run: bool, back: bool = True, smooth: bool = False) -> None:
     """Grab with a saved motion, then carry to a saved spot and back (episode.py's planned moves):
     play paths/<name> (rest -> the vial, gripper closes) -> lift -> straight flat carry to above `to` -> lower
     onto it; with back, the same moves in reverse and the grab backwards (releases the vial in its slot, rest)."""
@@ -103,14 +109,14 @@ def transfer(name: str, to: str, run: bool, back: bool = True) -> None:
     from arm_client import ArmClient
     client = ArmClient()
     try:
-        play(name, run=True)
+        play(name, run=True, smooth=smooth)
         for p in moves:
             print("  " + str(client.run(p).get("result")))
         if back:
             time.sleep(1.0)
             for p in reversed(moves):
                 print("  " + str(client.run(reverse_path(p)).get("result")))
-            play(name, run=True, reverse=True)
+            play(name, run=True, reverse=True, smooth=smooth)
     except (RuntimeError, TimeoutError) as e:
         sys.exit(f"STOPPED (arm is holding where it is): {e}")
     print("transfer done" + (": vial back in its slot" if back else f": at {to}"))
@@ -128,6 +134,7 @@ def main() -> None:
     ap.add_argument("--reverse", action="store_true", help="play: backwards (gripper releases first)")
     ap.add_argument("--to", default=None, help="transfer: spots.yaml target, e.g. vial_A_final_position")
     ap.add_argument("--no-return", action="store_true", help="transfer: stay at the target")
+    ap.add_argument("--smooth", action="store_true", help="play/transfer: smooth the recorded motion (smooth_path.py)")
     a = ap.parse_args()
     if a.op == "list":
         for n in names():
@@ -137,12 +144,12 @@ def main() -> None:
     if not a.name:
         ap.error("needs a motion name")
     if a.op == "play":
-        play(a.name, a.run, a.reverse)
+        play(a.name, a.run, a.reverse, a.smooth)
         return
     if a.op == "transfer":
         if not a.to:
             ap.error("transfer needs --to <spot>")
-        transfer(a.name, a.to, a.run, back=not a.no_return)
+        transfer(a.name, a.to, a.run, back=not a.no_return, smooth=a.smooth)
         return
     if not a.rec:
         ap.error("save needs --rec <recording folder>")

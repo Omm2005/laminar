@@ -37,6 +37,13 @@ HZ = 100.0
 GRIP_KP = 12.0           # N.m/rad, impedance gain on the gripper
 GRIP_DAMPING = 1.5       # MIT kd for the gripper
 GRIP_MOVE_TORQUE = 3.5   # torque limit for plain gripper moves (LeRobot RS default)
+# Same holding rule as teleop.py: once the jaws arrive, or stall short of the target because they closed on a
+# vial, drop to the holding torque. Without it a replayed grab squeezed the vial at 3.5 N.m for the whole carry
+# (teleop had held it at 1.0) and scratched the vials. Positions are untouched: only the force changes.
+GRIP_TORQUE_HOLDING = 1.0
+GRIP_HOLD_VEL = 0.25     # rad/s
+GRIP_STALL_S = 0.4       # jaws far from target but not moving for this long = closed on something: hold gently
+GRIP_NEAR_DEG = 3.0      # within this of the target counts as arrived (holding torque)
 VEL_FF_MAX = 3.0         # rad/s cap on the velocity feedforward
 VEL_FF_SMOOTH = 0.5      # low-pass on the feedforward (0..1, 1 = no smoothing)
 # The base (J1, RS06) at the default kp 50 sticks and slips on slow planned moves (~1 deg sawtooth, ~1 Hz,
@@ -67,16 +74,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hold-grip", action="store_true")
     ap.add_argument("--hold-torque", type=float, default=1.0)
+    ap.add_argument("--comp", nargs="?", const=str(HERE / "compensation.json"), default=None,
+                    help="add the gravity + friction feedforward fitted from Tiger data (compensation.py)")
     ap.add_argument("--idle-min", type=float, default=IDLE_TIMEOUT_S / 60,
                     help="rest and exit after this many minutes with no command (camera calibration can take long)")
     args = ap.parse_args()
     zero = load_follower_zero()
+    comp = None
+    if args.comp:
+        from compensation import Compensation
+        comp = Compensation.load(args.comp)
+        print(f"compensation: gravity {comp.gravity_scale}, friction {comp.friction_nm} N.m", flush=True)
     ids = list(JOINTS)
     dt = 1.0 / HZ
     bus = RobStrideBus()
     enabled = False
     cmd = {}
-    grip = {"target": 0.0, "limit": GRIP_MOVE_TORQUE}
+    grip = {"target": 0.0, "limit": GRIP_MOVE_TORQUE, "teleop_hold": True, "since": 0.0, "since_target": 0.0}
     vff = {m: 0.0 for m in ids if m != GRIPPER}  # velocity feedforward per arm joint, rad/s
     clock = {"t": time.perf_counter(), "next": time.perf_counter(), "prev": {}, "n": 0,
              "t_rate": time.perf_counter(), "hz": None}
@@ -91,19 +105,31 @@ def main():
         return math.degrees(bus.state[mid]["pos"]) - zero[mid]
 
     def send_all():
+        ff = comp.feedforward({m: cmd[m] for m in vff}, vff) if comp else {}
         for mid in ids:
             if mid == GRIPPER:
                 st = bus.state.get(mid)
                 tau = 0.0
                 if st:
                     target = math.radians(zero[mid] + grip["target"])
-                    tau = max(-grip["limit"], min(grip["limit"], GRIP_KP * (target - st["pos"])))
+                    limit = grip["limit"]
+                    if grip["teleop_hold"]:  # teleop.py's rule, see GRIP_TORQUE_HOLDING
+                        now_g = time.time()
+                        far = abs(math.degrees(target - st["pos"])) > GRIP_NEAR_DEG
+                        if abs(st["vel"]) > GRIP_HOLD_VEL or abs(grip["target"] - grip["since_target"]) > GRIP_NEAR_DEG:
+                            grip["since"], grip["since_target"] = now_g, grip["target"]  # moving or new target
+                        stalled = now_g - grip["since"] > GRIP_STALL_S
+                        limit = limit if far and not stalled else min(limit, GRIP_TORQUE_HOLDING)
+                    tau = max(-limit, min(limit, GRIP_KP * (target - st["pos"])))
                 bus.mit(mid, 0.0, 0.0, GRIP_DAMPING, torque=tau)
             else:
                 # velocity feedforward: without it the kd term brakes against every planned motion
                 # (stick-slip at slow speeds); with it kd only damps the velocity ERROR
                 kp, kd = GAIN_OVERRIDE.get(mid, JOINTS[mid][1:3])
-                tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL)
+                if comp and (mid in comp.friction_nm or mid in comp.gravity_scale):
+                    tau = ff[mid]  # fitted model replaces the hand-tuned friction on this joint
+                else:
+                    tau = FRICTION_FF_NM.get(mid, 0.0) * math.tanh(vff[mid] / FRICTION_FF_VEL) + ff.get(mid, 0.0)
                 bus.mit(mid, math.radians(zero[mid] + cmd[mid]), kp, kd, vel=vff[mid], torque=tau)
 
     def check():
@@ -207,7 +233,7 @@ def main():
         pts = [{m: clamp(m, p.get(m, cmd[m])) for m in arm_ids} for p in points]
         grips = [clamp(GRIPPER, p[GRIPPER]) for p in points] if all(GRIPPER in p for p in points) else None
         if grips:
-            grip["limit"] = GRIP_MOVE_TORQUE
+            grip["limit"], grip["teleop_hold"] = GRIP_MOVE_TORQUE, True
         duration = (len(pts) - 1) / hz
         t0 = time.time()
         t_status = 0.0
@@ -265,7 +291,7 @@ def main():
 
     def gripper_move(target, speed, limit=GRIP_MOVE_TORQUE):
         target = clamp(GRIPPER, target)
-        grip["limit"] = limit
+        grip["limit"], grip["teleop_hold"] = limit, True
         frm = grip["target"]
         duration = max(0.3, abs(target - frm) / speed)
         t0 = time.time()
@@ -280,7 +306,7 @@ def main():
 
     def grasp(speed, close_torque, hold_torque):
         """Close slowly with a low torque limit; the encoder tells us when the jaws stop on something."""
-        grip["limit"] = close_torque
+        grip["limit"], grip["teleop_hold"] = close_torque, False  # grasp sets its own holding torque
         start_pos = rel(GRIPPER)
         grip["target"] = start_pos
         stalled_since = None
