@@ -110,9 +110,9 @@ def tilt_speed_cap(table, tilt_deg: float) -> float:
 
 class TipTiltJoint:
     """The pour's 'motor 6', but tipping with every joint: positions are radians of tilt from the start (0 =
-    upright, as the pour began), hi = the furthest tilt in the table. A thread streams the joints for the current
-    tilt to arm_server's pose_stream at SEND_HZ (also the watchdog heartbeat); close() ends the stream and
-    arm_server takes the arm back to the start pose."""
+    upright, as the pour began), hi = the furthest tilt in the table. The table goes to arm_server once (table_tilt
+    op); a thread then streams only the tilt angle at SEND_HZ (also the watchdog heartbeat), and arm_server smooths
+    it and interpolates the joints at 100 Hz. close() tilts back and ends the op."""
 
     def __init__(self, client, table: list[dict[int, float]]):
         self.client, self.table = client, table
@@ -127,7 +127,8 @@ class TipTiltJoint:
         self._started = False
 
     def _start(self) -> None:
-        self.client.start_pose_stream(max_rate_deg_s=90.0, timeout_s=0.5)
+        self.client.start_table_tilt(self.table, TILT_STEP_DEG, max_rate_deg_s=60.0,
+                                     joint_rate_deg_s=JOINT_SPEED_DEG_S, timeout_s=0.5)
         self._started = self._running = True
         self._t = time.monotonic()
         self._thread = threading.Thread(target=self._heartbeat, name="tip-tilt", daemon=True)
@@ -139,7 +140,7 @@ class TipTiltJoint:
         step = min(self._v, cap) * min(now - self._t, 0.1)
         self._t = now
         self._pos += max(-step, min(step, self._target - self._pos))
-        self.client.set_pose(joints_at(self.table, math.degrees(self._pos)))
+        self.client.set_tilt(math.degrees(self._pos))
 
     def _heartbeat(self) -> None:
         while self._running:
@@ -168,4 +169,4 @@ class TipTiltJoint:
         if self._thread:
             self._thread.join(timeout=1.0)
         if self._started:
-            self.client.end_pose_stream()
+            self.client.end_tilt_stream()

@@ -12,6 +12,12 @@ Command file (write atomically; a new "id" triggers execution). Angles are degre
   {"id": 7, "op": "pose_stream", "max_rate_deg_s": 60, "timeout_s": 0.5}
         # follow live J1-J6 targets from arm_pose.json {"seq", "joints": {"1": deg, ...}, "done"} (the all-joint pour
         # tilt, pour_tilt.py); per-joint rate limit; watchdog or done: back to the pose it started from
+  {"id": 8, "op": "table_tilt", "table": [[j1..j6], ...], "step_deg": 1, "max_rate_deg_s": 30, "joint_rate_deg_s": 45,
+   "timeout_s": 0.5}
+        # the all-joint pour (pour_tilt.py): J1-J6 for 0, 1, 2 ... deg of tilt, sent once; then only the tilt angle
+        # is streamed in arm_tilt.json {"seq", "deg", "done"}. The tilt is smoothed HERE at 100 Hz and turned into
+        # joints by interpolating the table, so all six joints move smoothly together (streaming the joints at 25 Hz
+        # shook the arm at 25 Hz). Watchdog or done: back to 0 deg (= table row 0)
   {"id": 6, "op": "rest"}                                               # ease to zero pose, disable, exit
 Status is written to arm_status.json after every command and ~5x per second while busy.
 Creating a file named STOP also returns to rest and exits.
@@ -335,6 +341,59 @@ def main():
             vel[m] += max(-dv, min(dv, want - vel[m]))
             cmd[m] = clamp(m, cmd[m] + vel[m] * dt)
 
+    def table_tilt(table, step_deg, max_rate, joint_rate, timeout_s):
+        """The all-joint pour tilt: joints = table interpolated at a smoothly tracked tilt angle (see the op above)."""
+        arm = [m for m in ids if m != GRIPPER]
+        rows = [{m: float(r[m - 1]) for m in arm} for r in table]
+        n = len(rows) - 1
+        if n < 1:
+            return "table_tilt: table needs 2+ rows"
+        if max(abs(cmd[m] - rows[0][m]) for m in arm) > PATH_START_TOL_DEG:
+            return "table_tilt refused: the table does not start at the current pose"
+        gain = [max(abs(rows[i + 1][m] - rows[i][m]) for m in arm) / step_deg for i in range(n)]  # joint deg / tilt deg
+
+        def at(x):
+            i = min(int(x / step_deg), n - 1)
+            f = min(1.0, x / step_deg - i)
+            return {m: (1 - f) * rows[i][m] + f * rows[i + 1][m] for m in arm}
+
+        tilt, v, target = 0.0, 0.0, 0.0
+        last_seq, last_t = None, time.time()
+        ended, t_status = "done", 0.0
+
+        def step(goal):
+            nonlocal tilt, v
+            i = min(int(tilt / step_deg), n - 1)
+            cap = min(max_rate, joint_rate / max(gain[i], 1e-3))   # no joint faster than joint_rate
+            want = max(-cap, min(cap, (goal - tilt) / STREAM_TAU_S))
+            dv = STREAM_ACC_DEG_S2 * dt
+            v += max(-dv, min(dv, want - v))
+            tilt = max(0.0, min(n * step_deg, tilt + v * dt))
+            cmd.update(at(tilt))
+            tick()
+
+        while True:
+            try:
+                msg = json.loads(TILT_FILE.read_text())
+            except (ValueError, OSError):
+                msg = None
+            if msg and msg.get("seq") != last_seq:
+                last_seq, last_t = msg.get("seq"), time.time()
+                if msg.get("done"):
+                    break
+                target = max(0.0, min(n * step_deg, float(msg.get("deg", 0.0))))
+            if time.time() - last_t > timeout_s:
+                ended = f"watchdog: no tilt update for {timeout_s:.2f}s"
+                break
+            step(target)
+            if time.time() - t_status > 0.2:
+                t_status = time.time()
+                write_status(busy=True, doing="table_tilt", tilt_deg=round(tilt, 1))
+        while tilt > 0.05 or abs(v) > 0.5:      # back to 0 deg, same smoothing
+            step(0.0)
+        cmd.update(rows[0])
+        return f"table_tilt ended ({ended}), back upright"
+
     def pose_stream(max_rate, timeout_s):
         """Live control of J1-J6 from POSE_FILE: {"seq": n, "joints": {"1": deg, ...}, "done": bool}, each joint
         rate-limited to max_rate and clamped to its limits (the writer plans a smooth path; this is the safety net).
@@ -485,6 +544,10 @@ def main():
                     last["result"] = tilt_stream(j, float(c.get("base", cmd[j])),
                                                  float(c.get("max_rate_deg_s", 120.0)),
                                                  float(c.get("timeout_s", 0.5)))
+                elif op == "table_tilt":
+                    last["result"] = table_tilt(c["table"], float(c.get("step_deg", 1.0)),
+                                                float(c.get("max_rate_deg_s", 30.0)),
+                                                float(c.get("joint_rate_deg_s", 45.0)), float(c.get("timeout_s", 0.5)))
                 elif op == "pose_stream":
                     last["result"] = pose_stream(float(c.get("max_rate_deg_s", 60.0)), float(c.get("timeout_s", 0.5)))
                 elif op in ("rest", "stop"):

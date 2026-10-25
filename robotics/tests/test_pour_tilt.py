@@ -45,28 +45,50 @@ def test_joints_at_interpolates_between_samples():
 
 class FakeClient:
     def __init__(self):
-        self.poses, self.started, self.ended = [], False, False
+        self.tilts, self.table, self.ended = [], None, False
 
-    def start_pose_stream(self, **kw):
-        self.started = True
+    def start_table_tilt(self, table, step_deg, **kw):
+        self.table = table
 
-    def set_pose(self, joints, done=False):
-        self.poses.append(dict(joints))
+    def set_tilt(self, deg, done=False):
+        self.tilts.append(deg)
 
-    def end_pose_stream(self):
+    def end_tilt_stream(self):
         self.ended = True
 
 
-def test_tip_tilt_joint_streams_table_joints_and_ends_the_stream():
+def test_tip_tilt_joint_sends_the_table_once_then_only_the_angle():
     q, toward = _pour_start()
     table = PT.plan_tilt_table(q, toward, max_deg=20)
     c = FakeClient()
     j = PT.TipTiltJoint(c, table)
-    assert j.position() == 0.0 and c.started
+    assert j.position() == 0.0 and c.table is table
     j.move_to(math.radians(10), vlim=math.radians(60))
     time.sleep(0.6)
     assert abs(math.degrees(j.position()) - 10) < 0.5
     j.close()
-    assert c.ended and c.poses
-    p0, _ = M.fk_mm(table[0])
-    assert np.linalg.norm(M.fk_mm(c.poses[-1])[0] - p0) < 1.5
+    assert c.ended and c.tilts and abs(c.tilts[-1] - 10) < 0.5
+    assert all(b >= a - 1e-9 for a, b in zip(c.tilts, c.tilts[1:]))   # the angle only ramps up to 10 here
+
+
+def test_server_tilt_tracking_is_smooth_on_25_hz_updates():
+    """arm_server.table_tilt's tracking (same math), fed a tilt ramp updated 25 times a second: the joints' speed
+    must not step at each update (that shook the arm at 25 Hz)."""
+    import numpy as np
+    q, toward = _pour_start()
+    table = PT.plan_tilt_table(q, toward, max_deg=60)
+    n, dt, tau, acc = len(table) - 1, 0.01, 0.12, 400.0
+    gain = [max(abs(table[i + 1][m] - table[i][m]) for m in range(1, 7)) for i in range(n)]
+    tilt = v = goal = 0.0
+    joints = []
+    for k in range(600):
+        if k % 4 == 0:
+            goal = min(n, 15.0 * k * dt)
+        i = min(int(tilt), n - 1)
+        cap = min(60.0, 45.0 / max(gain[i], 1e-3))
+        want = max(-cap, min(cap, (goal - tilt) / tau))
+        v += max(-acc * dt, min(acc * dt, want - v))
+        tilt = max(0.0, min(n, tilt + v * dt))
+        joints.append([PT.joints_at(table, tilt)[m] for m in range(1, 7)])
+    jv = np.diff(np.array(joints), axis=0) / dt
+    assert np.max(np.abs(np.diff(jv, axis=0))) < 10.0          # deg/s change per 10 ms tick

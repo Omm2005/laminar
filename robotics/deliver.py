@@ -121,6 +121,9 @@ TILT_SPEED_DEG_S = 10.0   # wrist roll speed for the sample pour
 TILT_HOLD_S = 2.0         # held tilted this long
 
 
+SAG_PRECOMP = 0.7   # share of the carry-height sag the lower stops short (dry run: 39 mm there, ~28 at the pour)
+
+
 def measured_miss(client, settle_s: float = 0.5) -> np.ndarray:
     """(x, y, z) mm from where the tip really is (encoders) to where it is commanded: the sag here."""
     T.time.sleep(settle_s)
@@ -325,9 +328,9 @@ def main(argv=None) -> None:
             # carry height, and stop the lower that much short (in the command), so the tip ENDS on the pour point
             # instead of overshooting and climbing back up to it; settle_on then only trims the last few mm
             p_pour, R_pour = M.fk_mm(turn.final_joints)
-            sag = measured_miss(client)
+            sag = SAG_PRECOMP * measured_miss(client)   # the carry height sags more than the pour pose
             print(f"  sag at the carry height: tip {np.linalg.norm(sag):.1f} mm off ({sag[0]:+.1f}, {sag[1]:+.1f}, "
-                  f"{sag[2]:+.1f}): lowering that much short")
+                  f"{sag[2]:+.1f}) after the {SAG_PRECOMP:.0%} share: lowering that much short")
             q = client.current_joints()
             for mv in (M.plan_line(q, p_pour + sag, None, speed_mm_s=M.DEFAULT_LOWER_SPEED, label="lower"),):
                 _phase("lower")
