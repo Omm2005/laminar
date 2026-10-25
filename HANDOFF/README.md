@@ -4,6 +4,7 @@ Written for the next agent picking this up mid-hackathon. Read the files in orde
 
 | File | What's in it |
 | --- | --- |
+| [00-glossary-and-notation.md](00-glossary-and-notation.md) | **Every name and letter**: liquids/vials A-D (A = blood sample, B-D = reagents 1-3), containers/wells a-d (= channels 1/4/7/10, markers 10-13), job notation `A2b`, `A2b:50`, `B2b:+50`, the assay, phases, joints, frames, units, and where the repo disagrees |
 | [01-project-and-rules.md](01-project-and-rules.md) | What Laminar is, the goal, the team, **the user's rules** (git identity, what may be pushed, credits, how they like to work) |
 | [02-hardware.md](02-hardware.md) | The rig: arm, leader, cameras, ports, CAN adapter, power, every hardware quirk found so far |
 | [03-code-map.md](03-code-map.md) | Repos, worktrees, branches, and every file that matters with what it does |
