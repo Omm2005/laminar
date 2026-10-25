@@ -56,11 +56,15 @@ class ArmClient:
     # ---- reading the arm ---------------------------------------------------------------------
 
     def status(self) -> dict | None:
-        """Latest arm_status.json as a dict, or None if arm_server isn't running / file mid-write."""
-        try:
-            return json.loads(STATUS_FILE.read_text())
-        except (ValueError, OSError):
-            return None
+        """Latest arm_status.json as a dict, or None if arm_server isn't running. The server replaces the file
+        atomically, but on Windows a read during the replace fails for a moment: retry for up to ~0.2 s (a single
+        failed read once ended a run with 'arm_server.py is not running' while it was holding the arm)."""
+        for _ in range(10):
+            try:
+                return json.loads(STATUS_FILE.read_text())
+            except (ValueError, OSError):
+                time.sleep(0.02)
+        return None
 
     def current_joints(self) -> dict[int, float]:
         """Joint angles (degrees, {1..6}) the arm is currently commanded to.
