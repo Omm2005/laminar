@@ -24,6 +24,7 @@ import time
 
 from leader_arm import HERE, MAPPING, load_follower_zero
 from robstride_can import JOINTS, P_MECH_POS, P_RUN_MODE, RobStrideBus, fine_timer
+import arm_trace  # 100 Hz cmd/pos/vel/torque trace for Tiger (trajectory analysis)
 
 CMD_FILE = HERE / "arm_cmd.json"
 STATUS_FILE = HERE / "arm_status.json"
@@ -155,6 +156,10 @@ def main():
         clock["prev"], clock["t"] = dict(cmd), now
         send_all()
         check()
+        arm6 = range(1, 7)
+        arm_trace.record([cmd[m] for m in arm6], [rel(m) for m in arm6],
+                         [math.degrees(bus.state[m]["vel"]) for m in arm6], [bus.state[m]["torque"] for m in arm6],
+                         clock["hz"], last.get("op"))
         clock["next"] += dt
         wait = clock["next"] - time.perf_counter()
         if wait > 0:
@@ -421,6 +426,7 @@ def main():
             except Exception:
                 pass
             print(msg, flush=True)
+        arm_trace.flush()
         bus.close()
         STOP_FILE.unlink(missing_ok=True)
 

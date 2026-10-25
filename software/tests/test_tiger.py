@@ -108,3 +108,74 @@ def test_arm_sampler_records_each_new_status(tmp_path):
     n = tiger.sample_arm(sink, f, hz=50, duration_s=0.2)
     sink.close()
     assert n == 1 and db.rows[tiger.INSERT_ARM][0][4] == 0.5   # unchanged file: sampled once
+
+
+def _trace_line(t, cmd=1.0, pos=0.5):
+    return json.dumps({"t": t, "cmd": [cmd] * 6, "pos": [pos] * 6, "vel": [2.0] * 6, "tau": [0.1] * 6,
+                       "hz": 100.0, "op": "path"})
+
+
+def test_schema_has_run_trace_tables_and_functions():
+    db = FakeConn()
+    tiger.init_schema(db)
+    sql = "\n".join(s for s, _ in db.executed)
+    assert "create_hypertable('arm_trace'" in sql and "add_compression_policy('arm_trace'" in sql
+    assert "CREATE TABLE IF NOT EXISTS arm_runs" in sql
+    assert "FUNCTION run_smoothness" in sql and "FUNCTION run_trace" in sql
+
+
+def test_trace_rows_one_per_joint_inside_the_window():
+    rec = json.loads(_trace_line(10.0, cmd=3.0, pos=2.5))
+    rows = tiger.trace_rows(rec, t0=9.0, t1=11.0)
+    assert len(rows) == 6 and rows[0] == (tiger.INSERT_TRACE, (10.0, 1, 3.0, 2.5, 0.5, 2.0, 0.1, 100.0, "path"))
+    assert tiger.trace_rows(rec, t0=10.5) == [] and tiger.trace_rows(rec, t1=9.5) == []
+
+
+def test_trace_tail_skips_fragments_and_follows_rollover(tmp_path):
+    f = tmp_path / "arm_trace.jsonl"
+    f.write_text(_trace_line(1.0) + "\n" + _trace_line(2.0)[:20])   # second line still being written
+    db = FakeConn()
+    sink = tiger.TigerSink(lambda: db, flush_s=0.05)
+    tail = tiger.TraceTail(sink, f, t0=0.0)
+    assert tail.poll() == 1
+    with f.open("a") as fh:
+        fh.write(_trace_line(2.0)[20:] + "\n")
+    assert tail.poll() == 1                                          # the completed line, once
+    f.write_text(_trace_line(3.0) + "\n")                            # rolled over: smaller file
+    assert tail.poll() == 1
+    sink.close()
+    assert [r[0] for r in db.rows[tiger.INSERT_TRACE][::6]] == [1.0, 2.0, 3.0]
+
+
+def test_run_logger_records_the_run_and_only_its_trace(tmp_path):
+    f = tmp_path / "arm_trace.jsonl"
+    now = time.time()
+    f.write_text(_trace_line(now - 30) + "\n")                       # long before the run: not uploaded
+    db = FakeConn()
+    run = tiger.RunLogger(tiger.TigerSink(lambda: db, flush_s=0.05), "job1", "vial_A -> well_3",
+                          {"vial": 1}, trace_path=f, poll_s=0.02, settle_s=0.05)
+    with f.open("a") as fh:
+        fh.write(_trace_line(time.time()) + "\n")
+    run.event("step.start", {"name": "lift"})
+    stats = run.finish("done")
+    assert stats["trace_lines"] == 1 and len(db.rows[tiger.INSERT_TRACE]) == 6
+    start, end = db.rows[tiger.UPSERT_RUN]
+    assert start[0] == "job1" and start[3] is None and start[4] == "running"
+    assert end[3] is not None and end[4] == "done"
+    events = [p[2] for p in db.rows[tiger.INSERT_EVENT]]
+    assert events == ["step.start", "run.end"] and all(p[1] == "job1" for p in db.rows[tiger.INSERT_EVENT])
+
+
+def test_run_logger_is_off_without_a_dsn(monkeypatch):
+    monkeypatch.delenv(tiger.ENV_DSN, raising=False)
+    assert tiger.RunLogger.start("job1") is None
+
+
+def test_recording_import_differentiates_velocity(tmp_path):
+    (tmp_path / "meta.json").write_text(json.dumps({"fps": 20.0, "started": "2026-10-23 21:27:20"}))
+    head = "frame,t," + ",".join(f"{k}.J{j}" for k in ("action", "command", "state") for j in range(1, 8))
+    line = lambda i, t, x: f"{i},{t}," + ",".join([str(x)] * 21)
+    (tmp_path / "data.csv").write_text("\n".join([head, line(0, 0.0, 0.0), line(1, 0.05, 1.0)]) + "\n")
+    run_id, t0, t1, rows = tiger.recording_rows(tmp_path)
+    assert run_id == f"rec-{tmp_path.name}" and abs(t1 - t0 - 0.05) < 1e-6 and len(rows) == 12
+    assert abs(rows[6][1][5] - 20.0) < 1e-3 and rows[6][1][8] == "teleop"   # 1 deg in 50 ms

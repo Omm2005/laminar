@@ -145,6 +145,14 @@ python -m laminar.tiger init          # tables, aggregates, policies (safe to re
 python -m laminar.tiger backfill      # logs/telemetry.jsonl
 python -m laminar.tiger arm           # sample robotics/arm_status.json while arm_server runs
 python -m laminar.tiger report        # recent runs, pours, per-joint tracking from the aggregates
+python -m laminar.tiger run --name "vial A" -- python ../robotics/transfer.py vial_A well_3   # log a run
+python -m laminar.tiger smooth        # per-joint tracking error, jerk, stick-slip for the last run
+python -m laminar.tiger import ../robotics/recordings/<episode>   # a teleop recording as a run
 ```
 
 The fetch agent streams to Tiger automatically when `TIGER_DATABASE_URL` is set.
+
+Runs: `robotics/arm_server.py` writes a 100 Hz trace (commanded / measured / velocity / torque per joint,
+`robotics/arm_trace.py`) and `tiger run` uploads the part inside each run to the `arm_trace` hypertable,
+with one `arm_runs` row per run. `run_smoothness()` and `run_trace()` are SQL functions in Tiger, so the
+CLI and the console's Runs page (branch `tiger-runs`) compute the same numbers.
