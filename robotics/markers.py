@@ -504,7 +504,7 @@ def cmd_calibrate(a) -> None:
 
 APPROACH = 0  # column of the tool rotation along the gripper: in this URDF the tip is 166 mm along the tool x
               # axis from the wrist (checked on the taught grasp poses), not z as kinematics.py's docstring says
-TILTS_DEG = (0, 10, 20, 30, 40)  # visit tries pointing straight down first; the arm can't reach that at carry
+TILTS_DEG = (0, 10, 20, 30, 40, 50, 60)  # visit tries pointing straight down first; the arm can't reach that at carry
                                  # height (166 mm gripper, joint limits), so it then tilts the tip outward
 
 

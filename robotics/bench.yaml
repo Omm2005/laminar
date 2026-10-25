@@ -44,4 +44,4 @@ vial_types:
 # Box the gripper may enter, arm base frame, mm.
 workspace_mm:
   min: [-400, -400, 0]
-  max: [ 400,  400, 450]
+  max: [ 600,  400, 450]   # x raised from 400 so markers.py can reach trays 450-570 mm out
