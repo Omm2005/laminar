@@ -69,18 +69,19 @@ class Watch:
     def snapshot(self) -> dict:
         out = {}
         for n in self.names:
-            r = self.tracker.read(n)
-            out[n] = {"ml": round(float(r.ml), 3), "conf": round(float(r.conf), 2)}
+            r, raw = self.tracker.read_stable(n), self.tracker.read(n)     # damped for people; raw kept too
+            out[n] = {"ml": round(float(r.ml), 3), "raw_ml": round(float(raw.ml), 3), "conf": round(float(raw.conf), 2)}
         return out
 
     def _levels(self) -> None:
         with open(self.out / "levels.csv", "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["t", "phase"] + [f"{n}_{k}" for n in self.names for k in ("ml", "conf")])
+            w.writerow(["t", "phase"] + [f"{n}_{k}" for n in self.names for k in ("ml", "raw_ml", "conf")])
             while not self._stop.is_set():
                 snap = self.snapshot()
                 w.writerow([f"{time.time():.2f}", self.phase] + [v for n in self.names
-                                                                   for v in (snap[n]["ml"], snap[n]["conf"])])
+                                                                   for v in (snap[n]["ml"], snap[n]["raw_ml"],
+                                                                             snap[n]["conf"])])
                 f.flush()
                 time.sleep(1.0 / LEVEL_HZ)
 
@@ -114,7 +115,7 @@ class Watch:
             img = frame.copy()
             for name in self.names:
                 x, y, w, h = (int(v) for v in self.tracker.columns[name].roi)
-                r = self.tracker.read(name)
+                r = self.tracker.read_stable(name)
                 target = name in self.targets
                 col = (0, 200, 0) if target else (150, 150, 150)
                 cv2.rectangle(img, (x, y), (x + w, y + h), col, 2 if target else 1)

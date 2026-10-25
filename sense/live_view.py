@@ -327,7 +327,7 @@ def draw(frame: np.ndarray, tracker, names: list[str], start_ml: dict, capacity_
     for n in names:
         col = tracker.columns[n]
         x, y, w, h = col.roi
-        s = tracker.read(n)
+        s = tracker.read_stable(n)      # damped: no flicker / noise on empty columns
         full = s.px / h if h else 0.0
         flow = tracker.flow(n, FLOW_WINDOW_S)                   # mL/s
         sure = s.conf >= 0.5
@@ -368,7 +368,7 @@ def draw(frame: np.ndarray, tracker, names: list[str], start_ml: dict, capacity_
     cv2.rectangle(img, (0, 0), (img.shape[1], 26), (30, 30, 30), -1)
     parts = []
     for n in targets:
-        s = tracker.read(n)
+        s = tracker.read_stable(n)
         h = tracker.columns[n].roi[3]
         parts.append(f"{n} {steady(state, n + '%', s.px / h, 0.01):.0%} {steady(state, n + 'mL', s.ml, 0.01):.2f}mL "
                      f"{shown_rate(state, n + '/s', tracker.flow(n, FLOW_WINDOW_S)):+.2f}/s")

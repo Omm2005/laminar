@@ -163,6 +163,11 @@ def save_columns(path: str, columns: dict[str, Column], extra: dict | None = Non
         json.dump(data, f, indent=2)
 
 
+STABLE_WINDOW_S = 0.6   # read_stable: median over this long ...
+NOISE_ML = 0.3          # ... below this it reads 0 (the model's noise on an empty column) ...
+SMALL_ML = 1.5          # ... and a level under this that flickers more than its own size also reads 0
+
+
 class LevelTracker:
     """Runs in a thread, measuring every column on every new frame."""
 
@@ -216,6 +221,26 @@ class LevelTracker:
         return LevelSample(ml, px, min(s.conf for s in last), last[-1].ts,
                            last[-1].color, last[-1].rgb)
 
+    def read_stable(self, name: str) -> LevelSample:
+        """For people and logs, not for the pour controller: the median of the last STABLE_WINDOW_S, damped to 0
+        when it isn't significant: below NOISE_ML, or a small level (< SMALL_ML) flickering more than it reads
+        (an empty column at the edge of the view read 0.6-2 mL of glare/people noise). read() stays raw and fast:
+        the pour needs the first drops as they land."""
+        with self._lock:
+            hist = list(self._hist[name])
+        if not hist:
+            return self.read(name)
+        t_end = hist[-1].ts
+        win = [s for s in hist if t_end - s.ts <= STABLE_WINDOW_S and s.conf >= 0.3] or hist[-3:]
+        mls = np.array([s.ml for s in win])
+        ml = float(np.median(mls))
+        spread = float(np.percentile(mls, 90) - np.percentile(mls, 10)) if len(mls) > 2 else 0.0
+        if ml < NOISE_ML or (ml < SMALL_ML and spread > ml):
+            ml = 0.0
+        last = hist[-1]
+        return LevelSample(ml, float(np.median([s.px for s in win])), float(np.median([s.conf for s in win])),
+                           last.ts, last.color, last.rgb)
+
     def flow(self, name: str, window_s: float = 0.3) -> float:
         """mL per second: straight-line fit over the last window_s seconds."""
         with self._lock:
@@ -257,6 +282,9 @@ class FakeLevelTracker:
 
     def flow(self, name, window_s=0.3):
         return self.pouring_rate[name]
+
+    def read_stable(self, name):
+        return self.read(name)
 
 
 def draw_overlay(img, columns: dict[str, Column], tracker: LevelTracker | None = None,
