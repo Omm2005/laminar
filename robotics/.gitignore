@@ -10,3 +10,6 @@ arm_tilt.json
 vision_calib.yaml
 vision_debug.jpg
 vision_markers.pdf
+teleop_state.json
+tray_scan_*.jpg
+wrist_latest.jpg

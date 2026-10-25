@@ -12,7 +12,9 @@ Usage:  python teleop.py [--hz 100] [--max-speed 180] [--ramp-speed 20] [--durat
 --record saves camera video + joint data to recordings/<timestamp>/ (see recorder.py).
 """
 import argparse
+import json
 import math
+import os
 import sys
 import time
 
@@ -36,6 +38,7 @@ GRIP_HOLD_VEL = 0.25    # rad/s
 GRIP_STALL_S = 0.4      # jaws far from target but not moving for this long = closed on something: hold gently
 GRIP_NEAR_DEG = 3.0     # within this of the target counts as arrived (holding torque)
 STOP_FILE = HERE / "STOP"
+STATE_FILE = HERE / "teleop_state.json"  # measured follower joints at 10 Hz, for markers.py calibrate
 FEEDBACK_TIMEOUT = 0.25  # s without feedback from a follower motor -> stop
 LEADER_TIMEOUT = 0.5     # s without leader readings -> return to zero
 TEMP_LIMIT_C = 80.0
@@ -219,7 +222,7 @@ def main():
         print("Teleop running - press q (or Esc/Ctrl+C) to stop.")
 
         t_start = time.time()
-        t_print = 0.0
+        t_print = t_state = 0.0
         t_prev = time.perf_counter()
         loops = 0
         while not stop_requested():
@@ -245,6 +248,14 @@ def main():
             check_follower()
             loops += 1
             now = time.time()
+            if now - t_state > 0.1:  # best effort: a locked file never interrupts teleop
+                t_state = now
+                try:
+                    STATE_FILE.with_suffix(".tmp").write_text(json.dumps({"t": now, "joints": {
+                        m: round(math.degrees(st["pos"]) - zero[m], 3) for m, st in list(bus.state.items())}}))
+                    os.replace(STATE_FILE.with_suffix(".tmp"), STATE_FILE)
+                except OSError:
+                    pass
             if now - t_print > 0.5:
                 rate = loops / (now - t_print) if t_print else 0.0
                 t_print, loops = now, 0
