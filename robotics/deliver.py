@@ -168,7 +168,9 @@ def pour_pose(pose: dict, cont: int, offsets: dict, vial: str | None = None) -> 
     th = float(pose["heading_deg"])
     dxy = np.asarray(off["dxy_mm"], float) + np.asarray(load_vial_offsets().get(vial, (0.0, 0.0)), float)
     xy = np.asarray(pose["containers"][cont], float) + T.rot(th) @ dxy
-    p = np.array([xy[0], xy[1], float(off["z_mm"]) - EXTRA_LOWER_MM])  # EXTRA_LOWER_MM below the taught height
+    # EXTRA_LOWER_MM below the taught height, for poses taught as teleop COMMANDS (the arm hung below them); poses
+    # read from the encoders with the motors off are the true tip height already: extra_lower_mm 0 in the offsets
+    p = np.array([xy[0], xy[1], float(off["z_mm"]) - float(off.get("extra_lower_mm", EXTRA_LOWER_MM))])
     R = T.yaw(th) @ np.asarray(off["R_tray"], float)
     q0 = {int(j): float(v) for j, v in off["joints"].items()}
     p0, _ = M.fk_mm(q0)
