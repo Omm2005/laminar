@@ -3,7 +3,7 @@ import { internalMutation, internalQuery, mutation, query, type MutationCtx } fr
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { TASK } from "./schema";
-import { check, expand, r2, type Task } from "./lib";
+import { check, describe, expand, r2, type Task } from "./lib";
 import { workflow } from "./exec";
 import { limiter } from "./limits";
 import type { WorkflowId } from "@convex-dev/workflow";
@@ -89,39 +89,93 @@ export const applyPlan = internalMutation({
   },
 });
 
+/** Shared by the Run tab, voice and the assistant chat: a named person approves a plan that is waiting. */
+export async function approveRun(ctx: MutationCtx, id: Id<"runs">, by: string) {
+  const who = name(by);
+  const run = await ctx.db.get(id);
+  if (!run) throw new Error("That run no longer exists.");
+  if (run.status !== "awaiting_approval") throw new Error(`Only a plan waiting for approval can be approved; this one is ${run.status.replace("_", " ")}.`);
+  // Re-check at approval time: the bench may have changed since the plan was read back.
+  const errors = check(run.tasks as Task[], await ctx.db.query("tubes").collect(), await ctx.db.query("wells").collect());
+  if (errors.length) {
+    await ctx.db.patch(id, { status: "rejected", errors });
+    await log(ctx, "checker", "refused", "Bench changed after read-back. " + errors.join(" "), id);
+    return { ok: false as const, errors };
+  }
+  await ctx.db.patch(id, { status: "approved", approvedBy: who });
+  await log(ctx, who, "approve", `Approved ${run.moves?.length ?? 0} moves.`, id);
+  if (run.executor === "sim") await ctx.scheduler.runAfter(0, internal.runs.startNext, {});
+  return { ok: true as const, errors: [] };
+}
+
+export async function cancelRun(ctx: MutationCtx, id: Id<"runs">, by: string, reason?: string) {
+  const who = name(by);
+  const run = await ctx.db.get(id);
+  if (!run) return;
+  if (run.status === "done" || run.status === "aborted" || run.status === "rejected") return;
+  const why = reason?.trim() || (run.status === "running" ? "Stopped by operator" : "Cancelled before motion");
+  await ctx.db.patch(id, { status: "aborted", abortReason: why, finishedAt: Date.now() });
+  await log(ctx, who, run.status === "running" ? "stop" : "cancel", why, id);
+  // Stop the durable workflow; its onComplete handler starts the next queued run.
+  if (run.workflowId) await workflow.cancel(ctx, run.workflowId as WorkflowId);
+  else await ctx.scheduler.runAfter(0, internal.runs.startNext, {});
+}
+
 export const approve = mutation({
   args: { id: v.id("runs"), by: v.string() },
-  handler: async (ctx, { id, by }) => {
-    const who = name(by);
-    const run = await ctx.db.get(id);
-    if (!run) throw new Error("That run no longer exists.");
-    if (run.status !== "awaiting_approval") throw new Error(`Only a plan waiting for approval can be approved; this one is ${run.status.replace("_", " ")}.`);
-    // Re-check at approval time: the bench may have changed since the plan was read back.
-    const errors = check(run.tasks as Task[], await ctx.db.query("tubes").collect(), await ctx.db.query("wells").collect());
-    if (errors.length) {
-      await ctx.db.patch(id, { status: "rejected", errors });
-      await log(ctx, "checker", "refused", "Bench changed after read-back. " + errors.join(" "), id);
-      return;
-    }
-    await ctx.db.patch(id, { status: "approved", approvedBy: who });
-    await log(ctx, who, "approve", `Approved ${run.moves?.length ?? 0} moves.`, id);
-    if (run.executor === "sim") await ctx.scheduler.runAfter(0, internal.runs.startNext, {});
-  },
+  handler: async (ctx, { id, by }) => { await approveRun(ctx, id, by); },
 });
 
 export const cancel = mutation({
   args: { id: v.id("runs"), by: v.string(), reason: v.optional(v.string()) },
-  handler: async (ctx, { id, by, reason }) => {
+  handler: async (ctx, { id, by, reason }) => cancelRun(ctx, id, by, reason),
+});
+
+/** A person changes a plan that is waiting for approval (tube, well, mL per pour). The checker runs again, in code; a
+ *  plan that fails is not saved. The change is logged under their name and noted in the assistant chat. */
+export const editPlan = mutation({
+  args: { id: v.id("runs"), tasks: v.array(TASK), by: v.string() },
+  handler: async (ctx, { id, tasks, by }): Promise<{ ok: boolean; errors: string[] }> => {
     const who = name(by);
     const run = await ctx.db.get(id);
-    if (!run) return;
-    if (run.status === "done" || run.status === "aborted" || run.status === "rejected") return;
-    const why = reason?.trim() || (run.status === "running" ? "Stopped by operator" : "Cancelled before motion");
-    await ctx.db.patch(id, { status: "aborted", abortReason: why, finishedAt: Date.now() });
-    await log(ctx, who, run.status === "running" ? "stop" : "cancel", why, id);
-    // Stop the durable workflow; its onComplete handler starts the next queued run.
-    if (run.workflowId) await workflow.cancel(ctx, run.workflowId as WorkflowId);
-    else await ctx.scheduler.runAfter(0, internal.runs.startNext, {});
+    if (!run) throw new Error("That run no longer exists.");
+    if (run.status !== "awaiting_approval") throw new Error(`Only a plan waiting for approval can be changed; this one is ${run.status.replace("_", " ")}.`);
+    // Sample A goes first so reagents land on sample; the rest keep the order they were given.
+    const ordered = [...(tasks as Task[])].sort((a, b) => (a.tube === "A" ? -1 : b.tube === "A" ? 1 : 0));
+    const errors = check(ordered, await ctx.db.query("tubes").collect(), await ctx.db.query("wells").collect());
+    if (errors.length) return { ok: false, errors };
+    const moves = expand(ordered);
+    await ctx.db.patch(id, { tasks: ordered, moves, editedBy: who, errors: [] });
+    const what = describe(ordered);
+    await log(ctx, who, "edit", `Changed the plan before approval: ${what}`, id);
+    if (run.threadId) await ctx.db.insert("messages", { threadId: run.threadId, role: "user", text: `I changed the plan: ${what}`, by: who, t: Date.now() });
+    return { ok: true, errors: [] };
+  },
+});
+
+/** The assistant's request_approval (agent.ts): a plan Claude proposed becomes a run waiting for a person. The
+ *  checker runs again here, in code; an older plan still waiting in the same conversation is replaced. */
+export const proposeFromChat = internalMutation({
+  args: { threadId: v.string(), request: v.string(), requestedBy: v.string(), planner: v.string(), note: v.string(), tasks: v.array(TASK) },
+  handler: async (ctx, a): Promise<{ ok: true; runId: Id<"runs"> } | { ok: false; errors: string[] }> => {
+    const tasks = a.tasks as Task[];
+    const errors = check(tasks, await ctx.db.query("tubes").collect(), await ctx.db.query("wells").collect());
+    if (errors.length) return { ok: false, errors };
+    const waiting = await ctx.db.query("runs").withIndex("by_status", (q) => q.eq("status", "awaiting_approval"))
+      .filter((q) => q.eq(q.field("threadId"), a.threadId)).collect();
+    for (const old of waiting) {
+      await ctx.db.patch(old._id, { status: "rejected", errors: ["Replaced by a newer plan in the same conversation."] });
+      await log(ctx, "planner", "replaced", "A newer plan from the assistant replaced this one before approval.", old._id);
+    }
+    const who = name(a.requestedBy);
+    const moves = expand(tasks);
+    const id = await ctx.db.insert("runs", {
+      request: a.request.trim().slice(0, 500) || a.note, requestedBy: who, status: "awaiting_approval", executor: "sim",
+      planner: a.planner, plannerNote: a.note, tasks, moves, errors: [], via: "chat", threadId: a.threadId, createdAt: Date.now(),
+    });
+    await log(ctx, who, "submit", `${a.request.trim().slice(0, 300)} (via assistant chat)`, id);
+    await log(ctx, "checker", "passed", `${tasks.length} tasks, ${moves.length} moves. Waiting for approval.`, id);
+    return { ok: true, runId: id };
   },
 });
 

@@ -11,9 +11,9 @@ import type { Doc } from "../convex/_generated/dataModel";
  *   - "stop", "abort", "halt", "freeze" or "emergency" anywhere in a sentence stops at once
  */
 
-const STOP = /\b(stop|abort|halt|freeze|emergency)\b/i;
-const CANCEL = /\b(don'?t|do not) approve\b|\bcancel\b/i;
-const APPROVE = /^\W*(yes,? )?(approve|approved|go ahead)\W*$/i;
+export const STOP = /\b(stop|abort|halt|freeze|emergency)\b/i;
+export const CANCEL = /\b(don'?t|do not) approve\b|\bcancel\b/i;
+export const APPROVE = /^\W*(yes,? )?(approve|approved|go ahead)\W*$/i;
 
 const n = (x: number) => (x === 1 ? "1 milliliter" : `${x} milliliters`);
 const list = (xs: number[]) => (xs.length < 2 ? `${xs[0]}` : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
@@ -29,7 +29,7 @@ export function readBack(run: Doc<"runs">) {
   return `${parts.join(" ")} ${run.moves?.length ?? 0} moves. Say approve or cancel.`;
 }
 
-function useSpeaker(enabled: boolean) {
+export function useSpeaker(enabled: boolean) {
   const speak = useAction(api.voice.speak);
   const audio = useRef<HTMLAudioElement | null>(null);
   const queue = useRef<{ text: string; urgent: boolean }[]>([]);
@@ -60,6 +60,43 @@ function useSpeaker(enabled: boolean) {
   return { say, speaking };
 }
 
+/** Push-to-talk with Cartesia Ink: hold, speak, release; the transcript goes to onText. Shared by the Run tab's
+ *  voice panel and the assistant chat. */
+export function useHoldToTalk(name: string, onText: (text: string) => Promise<unknown> | void) {
+  const transcribe = useAction(api.voice.transcribe);
+  const [recording, setRec] = useState<MediaRecorder | null>(null);
+  const [error, setError] = useState("");
+  const [working, setWorking] = useState(false);
+  const start = async () => {
+    setError("");
+    if (!name.trim()) { setError("Enter your name at the top first, so the log records who spoke."); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const r = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      r.ondataavailable = (e) => chunks.push(e.data);
+      r.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: r.mimeType || "audio/webm" });
+        if (blob.size < 2000) { setError("Too short. Hold the button while you speak."); return; }
+        setWorking(true);
+        try {
+          const { text } = await transcribe({ audio: await blob.arrayBuffer(), mime: blob.type, by: name });
+          if (!text) setError("I didn't catch that. Hold the button while you speak.");
+          else await onText(text);
+        } catch (e) { setError(String((e as Error).message).replace(/^.*Uncaught Error: /s, "").split("\n")[0]); }
+        setWorking(false);
+      };
+      r.start();
+      setRec(r);
+    } catch {
+      setError("Microphone access was refused. Allow it in the browser, or type the request.");
+    }
+  };
+  const stop = () => { if (recording && recording.state !== "inactive") recording.stop(); setRec(null); };
+  return { start, stop, recording, working, error };
+}
+
 export default function Voice({ name, run, onRequest, onApprove, onCancel }: {
   name: string;
   run: Doc<"runs"> | undefined;
@@ -70,11 +107,8 @@ export default function Voice({ name, run, onRequest, onApprove, onCancel }: {
   const [enabled, setEnabled] = useState(() => { try { return localStorage.getItem("laminar.voice") !== "off"; } catch { return true; } });
   useEffect(() => { try { localStorage.setItem("laminar.voice", enabled ? "on" : "off"); } catch { /* ignore */ } }, [enabled]);
   const { say, speaking } = useSpeaker(enabled);
-  const transcribe = useAction(api.voice.transcribe);
-  const [rec, setRec] = useState<MediaRecorder | null>(null);
   const [heard, setHeard] = useState("");
-  const [error, setError] = useState("");
-  const [working, setWorking] = useState(false);
+  const [handleError, setError] = useState("");
 
   // Announce what happens to the run on screen.
   const seen = useRef<string>("");
@@ -104,6 +138,7 @@ export default function Voice({ name, run, onRequest, onApprove, onCancel }: {
 
   async function handle(text: string) {
     setHeard(text);
+    setError("");
     if (!text) { setError("I didn't catch that. Hold the button while you speak."); return; }
     const status = run?.status;
     if (STOP.test(text)) {
@@ -130,33 +165,9 @@ export default function Voice({ name, run, onRequest, onApprove, onCancel }: {
     await onRequest(text);
   }
 
-  async function start() {
-    setError("");
-    if (!name.trim()) { setError("Enter your name at the top first, so the log records who spoke."); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-      const r = new MediaRecorder(stream);
-      const chunks: Blob[] = [];
-      r.ondataavailable = (e) => chunks.push(e.data);
-      r.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: r.mimeType || "audio/webm" });
-        if (blob.size < 2000) { setError("Too short. Hold the button while you speak."); return; }
-        setWorking(true);
-        try {
-          const { text } = await transcribe({ audio: await blob.arrayBuffer(), mime: blob.type, by: name });
-          await handle(text);
-        } catch (e) { setError(String((e as Error).message).replace(/^.*Uncaught Error: /s, "").split("\n")[0]); }
-        setWorking(false);
-      };
-      r.start();
-      setRec(r);
-    } catch {
-      setError("Microphone access was refused. Allow it in the browser, or type the request.");
-    }
-  }
-  const stop = () => { if (rec && rec.state !== "inactive") rec.stop(); setRec(null); };
+  const { start, stop, recording: rec, working, error: recError } = useHoldToTalk(name, handle);
 
+  const error = recError || handleError;
   return (
     <div className="voice">
       <button

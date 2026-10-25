@@ -219,8 +219,8 @@ export function CompareBars({ rows, unit }: { rows: { joint: number; baseline: n
 }
 
 
-const VIA: Record<string, string> = { mana: "from Mana", voice: "voice", protocol: "protocol", web: "web" };
-/** Where a run came from: the Mana Lab Console, Cartesia voice, a saved protocol or the web form. */
+const VIA: Record<string, string> = { mana: "from Mana", voice: "voice", protocol: "protocol", web: "web", chat: "assistant" };
+/** Where a run came from: the Mana Lab Console, Cartesia voice, a saved protocol, the assistant chat or the web form. */
 export function Via({ v }: { v?: string }) {
   if (!v || v === "web") return null;
   return <span className={`chip via-${v}`}>{VIA[v] ?? v}</span>;

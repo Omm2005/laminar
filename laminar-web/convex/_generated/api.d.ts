@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agent from "../agent.js";
 import type * as bench from "../bench.js";
 import type * as crons from "../crons.js";
 import type * as exec from "../exec.js";
@@ -15,6 +16,7 @@ import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 import type * as limits from "../limits.js";
 import type * as mana from "../mana.js";
+import type * as messages from "../messages.js";
 import type * as planner from "../planner.js";
 import type * as poses from "../poses.js";
 import type * as protocols from "../protocols.js";
@@ -35,6 +37,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agent: typeof agent;
   bench: typeof bench;
   crons: typeof crons;
   exec: typeof exec;
@@ -42,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   limits: typeof limits;
   mana: typeof mana;
+  messages: typeof messages;
   planner: typeof planner;
   poses: typeof poses;
   protocols: typeof protocols;

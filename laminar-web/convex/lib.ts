@@ -35,6 +35,11 @@ export function expand(tasks: Task[]): string[] {
   return moves;
 }
 
+/** One line for logs and the assistant: "tube A 1 mL into well 1, 1 mL into well 2; tube B 0.5 mL into well 1." */
+export function describe(tasks: Task[]) {
+  return tasks.map((t) => `tube ${t.tube} ${t.pours.map((p) => `${p.ml} mL into well ${p.well}`).join(", ")}`).join("; ") + ".";
+}
+
 /** Checker rules, in code. Returns a list of human-readable errors; empty means the plan may be read back. */
 export function check(tasks: Task[], tubes: Doc<"tubes">[], wells: Doc<"wells">[]): string[] {
   const errors: string[] = [];

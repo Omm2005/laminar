@@ -27,17 +27,19 @@ export default defineSchema({
     executor: v.union(v.literal("sim"), v.literal("bench")),
     planner: v.optional(v.string()),       // "claude-opus-5-5" | "rules" | "protocol"
     structured: v.optional(v.boolean()),
-    via: v.optional(v.union(v.literal("web"), v.literal("voice"), v.literal("mana"), v.literal("protocol"))),   // machine-written request (Mana console): parsed by rules, not Claude
+    via: v.optional(v.union(v.literal("web"), v.literal("voice"), v.literal("mana"), v.literal("protocol"), v.literal("chat"))),   // machine-written request (Mana console): parsed by rules, not Claude
     plannerNote: v.optional(v.string()),   // one line from the planner: what it understood
     question: v.optional(v.string()),      // clarifying question instead of a plan
     tasks: v.optional(v.array(TASK)),
     moves: v.optional(v.array(v.string())), // expanded move list, e.g. "grab_A", "pour(well1, 1.0)"
     errors: v.optional(v.array(v.string())),
     approvedBy: v.optional(v.string()),
+    editedBy: v.optional(v.string()),      // a person changed the planned pours before approval
     step: v.optional(v.number()),          // index into moves while running
     abortReason: v.optional(v.string()),
     workflowId: v.optional(v.string()),     // the durable executor workflow (exec.ts)
     protocolId: v.optional(v.id("protocols")),
+    threadId: v.optional(v.string()),       // the assistant conversation that proposed it (agent.ts)
     result: v.optional(v.string()),        // measured readout written by the executor
     summary: v.optional(v.string()),       // Claude's note on the readout, if a key is set
     createdAt: v.number(),
@@ -79,6 +81,17 @@ export default defineSchema({
     contents: v.array(v.object({ tube: TUBE, ml: v.number() })),
     updatedAt: v.number(),
   }).index("by_number", ["number"]),
+
+  /** The assistant chat (agent.ts): one thread per browser. A plan card is a message pointing at its run. */
+  messages: defineTable({
+    threadId: v.string(),
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    text: v.string(),
+    by: v.optional(v.string()),            // who typed or spoke it
+    via: v.optional(v.union(v.literal("chat"), v.literal("voice"))),
+    runId: v.optional(v.id("runs")),       // set on plan cards
+    t: v.number(),
+  }).index("by_thread_t", ["threadId", "t"]),
 
   /** Append-only. No mutation updates or deletes these rows. */
   audit: defineTable({

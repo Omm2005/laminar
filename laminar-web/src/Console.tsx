@@ -9,9 +9,10 @@ import Builder from "./Builder";
 import LiveArm from "./robot/LiveArm";
 import Voice from "./Voice";
 import Cameras from "./Cameras";
+import Chat from "./Chat";
 
 const TABS = [
-  ["run", "Run"], ["builder", "Protocol builder"], ["qc", "Run log & QC"], ["reports", "Reports"], ["audit", "Audit"], ["game", "Beat the robot"], ["data", "Tiger Data"],
+  ["run", "Run"], ["chat", "Assistant"], ["builder", "Protocol builder"], ["qc", "Run log & QC"], ["reports", "Reports"], ["audit", "Audit"], ["game", "Beat the robot"], ["data", "Tiger Data"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
@@ -52,6 +53,7 @@ export default function Console() {
           ))}
         </div>
         {tab === "run" && <RunTab name={name} />}
+        {tab === "chat" && <Chat name={name} />}
         {tab === "builder" && <Builder name={name} onSent={() => setTab("run")} />}
         {tab === "qc" && <QcTab />}
         {tab === "reports" && <ReportsTab />}

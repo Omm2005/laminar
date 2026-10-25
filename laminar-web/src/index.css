@@ -177,6 +177,26 @@ svg text { font-family: var(--f-mono); }
 .chip.via-mana { color: #c9a7ff; border-color: currentColor; }
 .chip.via-voice { color: var(--accent); border-color: currentColor; }
 .chip.via-protocol { color: var(--ok); border-color: currentColor; }
+.chip.via-chat { color: #8fd3ff; border-color: currentColor; }
+
+/* assistant chat (Chat.tsx) */
+.chat { display: flex; flex-direction: column; height: min(78vh, 860px); }
+.chat-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 6px 2px 12px; border-top: 1px solid var(--rule); }
+.chat-empty { margin: auto 0; text-align: center; display: grid; gap: 10px; justify-items: center; padding: 24px 8px; }
+.chat-empty .chips { justify-content: center; }
+.msg-user { align-self: flex-end; max-width: 80%; padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: var(--glass); border: 1px solid var(--rule); white-space: pre-wrap; }
+.msg-bot { align-self: flex-start; max-width: 88%; padding: 2px 2px; white-space: pre-wrap; }
+.plan-card { border: 1px solid var(--rule); border-radius: 12px; padding: 12px 14px; background: var(--surface-2, var(--glass)); }
+.plan-card.waiting { border-color: var(--accent); }
+.plan-pours { display: grid; gap: 6px; }
+.plan-pour { display: grid; grid-template-columns: 64px minmax(0, 1fr) 16px auto; gap: 8px; align-items: center; font-size: 0.9375rem; }
+.link-btn { margin-top: 8px; background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 0.8125rem; }
+.link-btn:hover { color: var(--accent); }
+.chat-input { display: flex; gap: 8px; align-items: center; padding-top: 10px; border-top: 1px solid var(--rule); }
+.mic.small { width: 40px; height: 40px; }
+.plan-editor { display: grid; gap: 8px; }
+.plan-edit-row { display: grid; grid-template-columns: minmax(0, 1.4fr) 14px minmax(0, 1fr) 76px 24px auto; gap: 8px; align-items: center; }
+.plan-edit-row .input { padding: 6px 8px; }
 
 /* project page (landing-page facts) */
 .moves4, .hw { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
