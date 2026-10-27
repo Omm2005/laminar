@@ -45,15 +45,6 @@ For setup and component-specific instructions, see the README files in the relev
 
 Python, NumPy, OpenCV, ONNX, python-can, TypeScript, Convex, PostgreSQL/TimescaleDB (Tiger Data), Cartesia, Claude, Fetch.ai uAgents, and Mana.
 
-## Team
-
-| Area | Owner |
-| --- | --- |
-| Mechanical | Hema |
-| Robotics | Avery |
-| Sensing | Amogh |
-| Software | Om |
-
 ## Demo and links
 
 - [Laminar on Devpost](https://devpost.com/software/laminar-ma1h69)
